@@ -114,7 +114,6 @@ def callback_handler(update: Update, context: CallbackContext):
         query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode='Markdown')
         context.user_data['item_producao'] = item
 
-
 def registrar_dados(update, context):
     if registrar_nome(update, context):
         return
