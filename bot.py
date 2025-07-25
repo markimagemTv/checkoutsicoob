@@ -136,10 +136,11 @@ def registrar_dados(update, context):
             data_iso = data_obj.isoformat()
             c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente))
             registros = c.fetchall()
-            if registros:
-               resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
-         else:
-                resposta = "⚠️ Nenhum dado encontrado."
+           if registros:
+    resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
+else:
+    resposta = "⚠️ Nenhum dado encontrado."
+
             update.message.reply_text(resposta)
         except:
             update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome")
