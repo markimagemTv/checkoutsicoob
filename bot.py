@@ -133,8 +133,7 @@ def registrar_dados(update, context):
             c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_str, atendente))
             registros = c.fetchall()
             if registros:
-                resposta = f"📄 Produção de {atendente} em {data_str}:
-\n" + "\n".join([r[0] for r in registros])
+                resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
             else:
                 resposta = "⚠️ Nenhum dado encontrado."
             update.message.reply_text(resposta)
@@ -166,8 +165,7 @@ def totalizar(update, context, periodo='dia'):
     elif periodo == 'todos':
         c.execute("SELECT data, atendente, dados FROM producao ORDER BY data DESC")
         linhas = c.fetchall()
-        resposta = "📊 *Produção Geral*
-"
+        resposta = "📊 *Produção Geral*\n"
         for data, atendente, dado in linhas:
             resposta += f"\n📅 {data} - 👤 {atendente}: {dado}"
         update.callback_query.edit_message_text(resposta, parse_mode='Markdown')
@@ -185,8 +183,7 @@ def totalizar(update, context, periodo='dia'):
                 valor = linha[0].split(":")[-1].strip()
                 resumo[item] = resumo.get(item, []) + [valor]
 
-    texto = f"📊 *Resumo de Produção ({periodo.title()})*
-"
+    texto = f"📊 *Resumo de Produção ({periodo.title()})*\n"
     for k, v in resumo.items():
         texto += f"\n• {k}: {', '.join(v)}"
 
@@ -196,7 +193,7 @@ def totalizar(update, context, periodo='dia'):
         update.callback_query.edit_message_text(text=texto, parse_mode='Markdown')
 
 # Token do Bot (substitua pelo seu)
-TOKEN = '7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ'
+TOKEN = 'SEU_TOKEN_AQUI'
 
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
