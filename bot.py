@@ -1,9 +1,7 @@
 import sqlite3
 import datetime
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
-
-import os
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Conectar ao banco SQLite
 conn = sqlite3.connect("producao.db", check_same_thread=False)
@@ -51,13 +49,15 @@ itens_producao = [
     "Indicações solicitadas"
 ]
 
-# Teclado persistente sempre visível
-teclado_persistente = [
-    ["➕ Adicionar Nova Produção", "📅 Produção Diária"],
-    ["🗓️ Produção Semanal", "📆 Produção Mensal"],
-    ["📊 Produção Geral", "🔍 Buscar por Data/Atendente"]
-]
-reply_markup_persistente = ReplyKeyboardMarkup(teclado_persistente, resize_keyboard=True)
+# Teclado persistente para todas as mensagens
+reply_markup_persistente = InlineKeyboardMarkup([
+    [InlineKeyboardButton("➕ Adicionar Nova Produção", callback_data="adicionar_producao")],
+    [InlineKeyboardButton("📅 Produção Diária", callback_data="resumo_dia")],
+    [InlineKeyboardButton("🗓️ Produção Semanal", callback_data="resumo_semana")],
+    [InlineKeyboardButton("📆 Produção Mensal", callback_data="resumo_mes")],
+    [InlineKeyboardButton("📊 Produção Geral", callback_data="producao_geral")],
+    [InlineKeyboardButton("🔍 Buscar por Data/Atendente", callback_data="buscar_data")]
+])
 
 def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -81,95 +81,90 @@ def registrar_nome(update: Update, context: CallbackContext):
         c.execute("INSERT INTO atendentes (user_id, nome) VALUES (?, ?)", (user_id, nome))
         conn.commit()
         esperando_nome.pop(user_id)
-        update.message.reply_text(
-            f"✅ Nome registrado como {nome}. Use /start para iniciar novamente.",
-            reply_markup=reply_markup_persistente
-        )
+        update.message.reply_text(f"✅ Nome registrado como {nome}. Use /start para iniciar novamente.")
         return True
     return False
-
-def mensagem_texto(update: Update, context: CallbackContext):
-    texto = update.message.text
-
-    # Se estiver esperando nome, registra
-    if registrar_nome(update, context):
-        return
-
-    # Busca o atendente no banco
-    user_id = update.effective_user.id
-    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
-    resultado = c.fetchone()
-    if not resultado:
-        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
-        return
-
-    nome = resultado[0]
-
-    if texto == "➕ Adicionar Nova Produção":
-        botoes = [[InlineKeyboardButton(text=item, callback_data=f"producao_{item}")] for item in itens_producao]
-        update.message.reply_text("📝 Selecione o item de produção:", reply_markup=InlineKeyboardMarkup(botoes))
-
-    elif texto == "📅 Produção Diária":
-        totalizar(update, context, periodo='dia')
-
-    elif texto == "🗓️ Produção Semanal":
-        totalizar(update, context, periodo='semana')
-
-    elif texto == "📆 Produção Mensal":
-        totalizar(update, context, periodo='mes')
-
-    elif texto == "📊 Produção Geral":
-        totalizar(update, context, periodo='todos')
-
-    elif texto == "🔍 Buscar por Data/Atendente":
-        update.message.reply_text(
-            "🔎 Envie a data (AAAA-MM-DD) e o nome do atendente, separados por vírgula.\nExemplo: 2025-07-25, João",
-            reply_markup=reply_markup_persistente
-        )
-        context.user_data['modo_busca'] = True
-
-    else:
-        # Se estiver em modo busca, processa a consulta
-        if context.user_data.get('modo_busca'):
-            context.user_data.pop('modo_busca', None)
-            try:
-                data_str, atendente_busca = [x.strip() for x in texto.split(",")]
-                c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_str, atendente_busca))
-                registros = c.fetchall()
-                if registros:
-                    resposta = f"📄 Produção de {atendente_busca} em {data_str}:\n" + "\n".join([r[0] for r in registros])
-                else:
-                    resposta = "⚠️ Nenhum dado encontrado."
-                update.message.reply_text(resposta, reply_markup=reply_markup_persistente)
-            except:
-                update.message.reply_text("❌ Formato inválido. Use: AAAA-MM-DD, Nome", reply_markup=reply_markup_persistente)
-            return
-
-        # Caso contrário, tenta registrar a produção
-        item = context.user_data.get('item_producao')
-        if not item:
-            update.message.reply_text("⚠️ Use o botão ➕ Adicionar Nova Produção para começar.", reply_markup=reply_markup_persistente)
-            return
-
-        data = datetime.date.today().isoformat()
-        registro = f"{item}: {texto}"
-
-        c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)",
-                  (nome, data, registro))
-        conn.commit()
-
-        context.user_data.pop('item_producao', None)
-        update.message.reply_text("✅ Produção registrada com sucesso!", reply_markup=reply_markup_persistente)
 
 def callback_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     data = query.data
 
-    if data.startswith("producao_"):
+    if data == "adicionar_producao":
+        botoes = [[InlineKeyboardButton(text=item, callback_data=f"producao_{item}")] for item in itens_producao]
+        query.edit_message_text("📝 Selecione o item de produção:", reply_markup=InlineKeyboardMarkup(botoes))
+
+    elif data.startswith("producao_"):
         item = data.replace("producao_", "")
         query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode='Markdown')
         context.user_data['item_producao'] = item
+
+    elif data.startswith("resumo_"):
+        if data == "resumo_dia":
+            totalizar(query, context, periodo='dia')
+        elif data == "resumo_semana":
+            totalizar(query, context, periodo='semana')
+        elif data == "resumo_mes":
+            totalizar(query, context, periodo='mes')
+
+    elif data == "producao_geral":
+        totalizar(query, context, periodo='todos')
+
+    elif data == "buscar_data":
+        query.edit_message_text(
+            "🔎 Envie a data (DD/MM/AAAA) e o nome do atendente, separados por vírgula.\nExemplo: 25/07/2025, João",
+            reply_markup=reply_markup_persistente
+        )
+        context.user_data['modo_busca'] = True
+
+def registrar_dados(update, context):
+    if registrar_nome(update, context):
+        return
+
+    user_id = update.effective_user.id
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
+    resultado = c.fetchone()
+    if not resultado:
+        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.", reply_markup=reply_markup_persistente)
+        return
+
+    nome = resultado[0]
+    texto = update.message.text
+
+    if context.user_data.get('modo_busca'):
+        context.user_data.pop('modo_busca', None)
+        try:
+            data_str, atendente_busca = [x.strip() for x in texto.split(",")]
+
+            # converter data de DD/MM/AAAA para AAAA-MM-DD
+            dia, mes, ano = data_str.split("/")
+            data_iso = f"{ano}-{mes.zfill(2)}-{dia.zfill(2)}"
+
+            c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente_busca))
+            registros = c.fetchall()
+            if registros:
+                resposta = f"📄 Produção de {atendente_busca} em {data_str}:\n" + "\n".join([r[0] for r in registros])
+            else:
+                resposta = "⚠️ Nenhum dado encontrado."
+            update.message.reply_text(resposta, reply_markup=reply_markup_persistente)
+        except Exception:
+            update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome", reply_markup=reply_markup_persistente)
+        return
+
+    item = context.user_data.get('item_producao')
+    if not item:
+        update.message.reply_text("⚠️ Use /start para selecionar o item que deseja informar.", reply_markup=reply_markup_persistente)
+        return
+
+    data = datetime.date.today().isoformat()
+    registro = f"{item}: {texto}"
+
+    c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)",
+              (nome, data, registro))
+    conn.commit()
+
+    context.user_data.pop('item_producao', None)
+    update.message.reply_text("✅ Produção registrada com sucesso! Use /start para enviar mais ou ver relatórios.", reply_markup=reply_markup_persistente)
 
 def totalizar(update, context, periodo='dia'):
     hoje = datetime.date.today()
@@ -181,9 +176,9 @@ def totalizar(update, context, periodo='dia'):
         c.execute("SELECT data, atendente, dados FROM producao ORDER BY data DESC")
         linhas = c.fetchall()
         resposta = "📊 *Produção Geral*\n"
-        for data_, atendente_, dado in linhas:
-            resposta += f"\n📅 {data_} - 👤 {atendente_}: {dado}"
-        update.message.reply_text(resposta, parse_mode='Markdown', reply_markup=reply_markup_persistente)
+        for data, atendente, dado in linhas:
+            resposta += f"\n📅 {data} - 👤 {atendente}: {dado}"
+        update.callback_query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=reply_markup_persistente)
         return
     else:
         inicio = hoje
@@ -202,7 +197,10 @@ def totalizar(update, context, periodo='dia'):
     for k, v in resumo.items():
         texto += f"\n• {k}: {', '.join(v)}"
 
-    update.message.reply_text(texto, parse_mode='Markdown', reply_markup=reply_markup_persistente)
+    if hasattr(update, 'message') and update.message:
+        update.message.reply_text(texto, parse_mode='Markdown', reply_markup=reply_markup_persistente)
+    else:
+        update.callback_query.edit_message_text(text=texto, parse_mode='Markdown', reply_markup=reply_markup_persistente)
 
 # Token do Bot (substitua pelo seu)
 TOKEN = '7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ'
@@ -213,7 +211,7 @@ dp = updater.dispatcher
 # Handlers
 dp.add_handler(CommandHandler("start", start))
 dp.add_handler(CallbackQueryHandler(callback_handler))
-dp.add_handler(MessageHandler(Filters.text & ~Filters.command, mensagem_texto))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, registrar_dados))
 
 # Iniciar o bot
 updater.start_polling()
