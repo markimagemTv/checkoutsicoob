@@ -136,11 +136,10 @@ def registrar_dados(update, context):
             data_iso = data_obj.isoformat()
             c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente))
             registros = c.fetchall()
-           if registros:
-    resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
-else:
-    resposta = "⚠️ Nenhum dado encontrado."
-
+            if registros:
+                resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
+            else:
+                resposta = "⚠️ Nenhum dado encontrado."
             update.message.reply_text(resposta)
         except:
             update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome")
@@ -223,7 +222,7 @@ def totalizar(update, context, periodo='dia'):
     update.message.reply_text(texto, parse_mode='Markdown')
 
 # Token do Bot (substitua pelo seu)
-TOKEN = '7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ'
+TOKEN = '7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQI'
 
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
