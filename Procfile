@@ -1,1 +1,2 @@
-web: python nome_do_arquivo.py
+web: python bot.py
+
