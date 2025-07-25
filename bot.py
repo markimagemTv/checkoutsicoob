@@ -2,6 +2,8 @@ import sqlite3
 import datetime
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+import re
+import os
 
 # Conectar ao banco SQLite
 conn = sqlite3.connect("producao.db", check_same_thread=False)
@@ -49,16 +51,6 @@ itens_producao = [
     "Indicações solicitadas"
 ]
 
-# Teclado persistente para todas as mensagens
-reply_markup_persistente = InlineKeyboardMarkup([
-    [InlineKeyboardButton("➕ Adicionar Nova Produção", callback_data="adicionar_producao")],
-    [InlineKeyboardButton("📅 Produção Diária", callback_data="resumo_dia")],
-    [InlineKeyboardButton("🗓️ Produção Semanal", callback_data="resumo_semana")],
-    [InlineKeyboardButton("📆 Produção Mensal", callback_data="resumo_mes")],
-    [InlineKeyboardButton("📊 Produção Geral", callback_data="producao_geral")],
-    [InlineKeyboardButton("🔍 Buscar por Data/Atendente", callback_data="buscar_data")]
-])
-
 def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
@@ -66,10 +58,16 @@ def start(update: Update, context: CallbackContext):
 
     if resultado:
         nome = resultado[0]
-        update.message.reply_text(
-            f"👋 Olá, {nome}! Escolha uma opção abaixo:",
-            reply_markup=reply_markup_persistente
-        )
+        botoes = [
+            [InlineKeyboardButton("➕ Adicionar Nova Produção", callback_data="adicionar_producao")],
+            [InlineKeyboardButton("📅 Produção Diária", callback_data="resumo_dia")],
+            [InlineKeyboardButton("🗓️ Produção Semanal", callback_data="resumo_semana")],
+            [InlineKeyboardButton("📆 Produção Mensal", callback_data="resumo_mes")],
+            [InlineKeyboardButton("📊 Produção Geral", callback_data="producao_geral")],
+            [InlineKeyboardButton("🔍 Buscar por Data/Atendente", callback_data="buscar_data")]
+        ]
+        update.message.reply_text(f"👋 Olá, {nome}! Escolha uma opção abaixo:",
+                                  reply_markup=InlineKeyboardMarkup(botoes))
     else:
         esperando_nome[user_id] = True
         update.message.reply_text("👤 Por favor, envie seu nome para registro:")
@@ -111,10 +109,7 @@ def callback_handler(update: Update, context: CallbackContext):
         totalizar(query, context, periodo='todos')
 
     elif data == "buscar_data":
-        query.edit_message_text(
-            "🔎 Envie a data (DD/MM/AAAA) e o nome do atendente, separados por vírgula.\nExemplo: 25/07/2025, João",
-            reply_markup=reply_markup_persistente
-        )
+        query.edit_message_text("🔎 Envie a data (DD/MM/AAAA) e o nome do atendente, separados por vírgula.\nExemplo: 25/07/2025, João")
         context.user_data['modo_busca'] = True
 
 def registrar_dados(update, context):
@@ -125,7 +120,7 @@ def registrar_dados(update, context):
     c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
     resultado = c.fetchone()
     if not resultado:
-        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.", reply_markup=reply_markup_persistente)
+        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
         return
 
     nome = resultado[0]
@@ -134,26 +129,24 @@ def registrar_dados(update, context):
     if context.user_data.get('modo_busca'):
         context.user_data.pop('modo_busca', None)
         try:
-            data_str, atendente_busca = [x.strip() for x in texto.split(",")]
-
-            # converter data de DD/MM/AAAA para AAAA-MM-DD
-            dia, mes, ano = data_str.split("/")
-            data_iso = f"{ano}-{mes.zfill(2)}-{dia.zfill(2)}"
-
-            c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente_busca))
+            data_str, atendente = [x.strip() for x in texto.split(",")]
+            data_obj = datetime.datetime.strptime(data_str, "%d/%m/%Y").date()
+            data_iso = data_obj.isoformat()
+            c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente))
             registros = c.fetchall()
             if registros:
-                resposta = f"📄 Produção de {atendente_busca} em {data_str}:\n" + "\n".join([r[0] for r in registros])
+                resposta = f"📄 Produção de {atendente} em {data_str}:
+" + "\n".join([r[0] for r in registros])
             else:
                 resposta = "⚠️ Nenhum dado encontrado."
-            update.message.reply_text(resposta, reply_markup=reply_markup_persistente)
-        except Exception:
-            update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome", reply_markup=reply_markup_persistente)
+            update.message.reply_text(resposta)
+        except:
+            update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome")
         return
 
     item = context.user_data.get('item_producao')
     if not item:
-        update.message.reply_text("⚠️ Use /start para selecionar o item que deseja informar.", reply_markup=reply_markup_persistente)
+        update.message.reply_text("⚠️ Use /start para selecionar o item que deseja informar.")
         return
 
     data = datetime.date.today().isoformat()
@@ -164,7 +157,7 @@ def registrar_dados(update, context):
     conn.commit()
 
     context.user_data.pop('item_producao', None)
-    update.message.reply_text("✅ Produção registrada com sucesso! Use /start para enviar mais ou ver relatórios.", reply_markup=reply_markup_persistente)
+    update.message.reply_text("✅ Produção registrada com sucesso! Use /start para enviar mais ou ver relatórios.")
 
 def totalizar(update, context, periodo='dia'):
     hoje = datetime.date.today()
@@ -173,12 +166,33 @@ def totalizar(update, context, periodo='dia'):
     elif periodo == 'mes':
         inicio = hoje.replace(day=1)
     elif periodo == 'todos':
-        c.execute("SELECT data, atendente, dados FROM producao ORDER BY data DESC")
+        c.execute("SELECT dados FROM producao")
         linhas = c.fetchall()
-        resposta = "📊 *Produção Geral*\n"
-        for data, atendente, dado in linhas:
-            resposta += f"\n📅 {data} - 👤 {atendente}: {dado}"
-        update.callback_query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=reply_markup_persistente)
+        resumo = {}
+
+        for linha in linhas:
+            texto = linha[0]
+            for item in itens_producao:
+                if item.lower() in texto.lower():
+                    try:
+                        valor_str = texto.split(":")[-1].strip()
+                        valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
+                        encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
+                        if not encontrado:
+                            continue
+                        valor = float(encontrado[0])
+                        resumo[item] = resumo.get(item, 0) + valor
+                    except:
+                        pass
+
+        resposta = "📊 *Produção Geral (Totais)*\n"
+        for item, total in resumo.items():
+            if "R$" in item:
+                resposta += f"\n• {item}: R$ {total:,.2f}"
+            else:
+                resposta += f"\n• {item}: {int(total)}"
+
+        update.callback_query.edit_message_text(resposta, parse_mode='Markdown')
         return
     else:
         inicio = hoje
@@ -197,10 +211,10 @@ def totalizar(update, context, periodo='dia'):
     for k, v in resumo.items():
         texto += f"\n• {k}: {', '.join(v)}"
 
-    if hasattr(update, 'message') and update.message:
-        update.message.reply_text(texto, parse_mode='Markdown', reply_markup=reply_markup_persistente)
+    if hasattr(update, 'message'):
+        update.message.reply_text(texto, parse_mode='Markdown')
     else:
-        update.callback_query.edit_message_text(text=texto, parse_mode='Markdown', reply_markup=reply_markup_persistente)
+        update.callback_query.edit_message_text(text=texto, parse_mode='Markdown')
 
 # Token do Bot (substitua pelo seu)
 TOKEN = '7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ'
