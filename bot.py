@@ -1,6 +1,7 @@
 import psycopg2
 import datetime
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update
 import re
 import os
 
@@ -8,19 +9,60 @@ import os
 DATABASE_URL = os.environ.get("DATABASE_URL")
 conn = psycopg2.connect(DATABASE_URL, sslmode='require')
 c = conn.cursor()
+
+# Tabela de produção
 c.execute('''CREATE TABLE IF NOT EXISTS producao (
     id SERIAL PRIMARY KEY,
     atendente TEXT,
     data DATE,
     dados TEXT
 )''')
+
+# Tabela de atendentes
+c.execute('''CREATE TABLE IF NOT EXISTS atendentes (
+    user_id BIGINT PRIMARY KEY,
+    nome TEXT
+)''')
 conn.commit()
 
-def start(update, context):
-    update.message.reply_text("👋 Olá! Envie sua produção no formato solicitado.")
+# Estado temporário para nome de atendente
+esperando_nome = {}
+
+def start(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    c.execute("SELECT nome FROM atendentes WHERE user_id = %s", (user_id,))
+    resultado = c.fetchone()
+
+    if resultado:
+        nome = resultado[0]
+        update.message.reply_text(f"👋 Olá, {nome}! Envie sua produção no formato solicitado.")
+    else:
+        esperando_nome[user_id] = True
+        update.message.reply_text("👤 Por favor, envie seu nome para registro:")
+
+def registrar_nome(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    if esperando_nome.get(user_id):
+        nome = update.message.text.strip()
+        c.execute("INSERT INTO atendentes (user_id, nome) VALUES (%s, %s)", (user_id, nome))
+        conn.commit()
+        esperando_nome.pop(user_id)
+        update.message.reply_text(f"✅ Nome registrado como {nome}. Agora envie sua produção no formato solicitado.")
+        return True
+    return False
 
 def registrar_dados(update, context):
-    nome = update.message.from_user.first_name
+    if registrar_nome(update, context):
+        return
+
+    user_id = update.effective_user.id
+    c.execute("SELECT nome FROM atendentes WHERE user_id = %s", (user_id,))
+    resultado = c.fetchone()
+    if not resultado:
+        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
+        return
+
+    nome = resultado[0]
     texto = update.message.text
     data = datetime.date.today().isoformat()
 
