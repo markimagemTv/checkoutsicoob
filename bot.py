@@ -58,11 +58,15 @@ def start(update: Update, context: CallbackContext):
 
     if resultado:
         nome = resultado[0]
-        botoes = [[InlineKeyboardButton(text=item, callback_data=f"producao_{item}")] for item in itens_producao]
-        botoes += [[InlineKeyboardButton("📅 Produção Diária", callback_data="resumo_dia")],
-                   [InlineKeyboardButton("🗓️ Produção Semanal", callback_data="resumo_semana")],
-                   [InlineKeyboardButton("📆 Produção Mensal", callback_data="resumo_mes")]]
-        update.message.reply_text(f"👋 Olá, {nome}! Selecione um item para registrar sua produção ou visualizar resumo:",
+        botoes = [
+            [InlineKeyboardButton("➕ Adicionar Nova Produção", callback_data="adicionar_producao")],
+            [InlineKeyboardButton("📅 Produção Diária", callback_data="resumo_dia")],
+            [InlineKeyboardButton("🗓️ Produção Semanal", callback_data="resumo_semana")],
+            [InlineKeyboardButton("📆 Produção Mensal", callback_data="resumo_mes")],
+            [InlineKeyboardButton("📊 Produção Geral", callback_data="producao_geral")],
+            [InlineKeyboardButton("🔍 Buscar por Data/Atendente", callback_data="buscar_data")]
+        ]
+        update.message.reply_text(f"👋 Olá, {nome}! Escolha uma opção abaixo:",
                                   reply_markup=InlineKeyboardMarkup(botoes))
     else:
         esperando_nome[user_id] = True
@@ -84,10 +88,15 @@ def callback_handler(update: Update, context: CallbackContext):
     query.answer()
     data = query.data
 
-    if data.startswith("producao_"):
+    if data == "adicionar_producao":
+        botoes = [[InlineKeyboardButton(text=item, callback_data=f"producao_{item}")] for item in itens_producao]
+        query.edit_message_text("📝 Selecione o item de produção:", reply_markup=InlineKeyboardMarkup(botoes))
+
+    elif data.startswith("producao_"):
         item = data.replace("producao_", "")
         query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode='Markdown')
         context.user_data['item_producao'] = item
+
     elif data.startswith("resumo_"):
         if data == "resumo_dia":
             totalizar(query, context, periodo='dia')
@@ -95,6 +104,13 @@ def callback_handler(update: Update, context: CallbackContext):
             totalizar(query, context, periodo='semana')
         elif data == "resumo_mes":
             totalizar(query, context, periodo='mes')
+
+    elif data == "producao_geral":
+        totalizar(query, context, periodo='todos')
+
+    elif data == "buscar_data":
+        query.edit_message_text("🔎 Envie a data (AAAA-MM-DD) e o nome do atendente, separados por vírgula.\nExemplo: 2025-07-25, João")
+        context.user_data['modo_busca'] = True
 
 def registrar_dados(update, context):
     if registrar_nome(update, context):
@@ -109,8 +125,24 @@ def registrar_dados(update, context):
 
     nome = resultado[0]
     texto = update.message.text
-    item = context.user_data.get('item_producao')
 
+    if context.user_data.get('modo_busca'):
+        context.user_data.pop('modo_busca', None)
+        try:
+            data_str, atendente = [x.strip() for x in texto.split(",")]
+            c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_str, atendente))
+            registros = c.fetchall()
+            if registros:
+                resposta = f"📄 Produção de {atendente} em {data_str}:
+\n" + "\n".join([r[0] for r in registros])
+            else:
+                resposta = "⚠️ Nenhum dado encontrado."
+            update.message.reply_text(resposta)
+        except:
+            update.message.reply_text("❌ Formato inválido. Use: AAAA-MM-DD, Nome")
+        return
+
+    item = context.user_data.get('item_producao')
     if not item:
         update.message.reply_text("⚠️ Use /start para selecionar o item que deseja informar.")
         return
@@ -131,8 +163,18 @@ def totalizar(update, context, periodo='dia'):
         inicio = hoje - datetime.timedelta(days=hoje.weekday())
     elif periodo == 'mes':
         inicio = hoje.replace(day=1)
+    elif periodo == 'todos':
+        c.execute("SELECT data, atendente, dados FROM producao ORDER BY data DESC")
+        linhas = c.fetchall()
+        resposta = "📊 *Produção Geral*
+"
+        for data, atendente, dado in linhas:
+            resposta += f"\n📅 {data} - 👤 {atendente}: {dado}"
+        update.callback_query.edit_message_text(resposta, parse_mode='Markdown')
+        return
     else:
         inicio = hoje
+
     c.execute("SELECT dados FROM producao WHERE data >= ?", (inicio.isoformat(),))
     linhas = c.fetchall()
 
@@ -143,7 +185,8 @@ def totalizar(update, context, periodo='dia'):
                 valor = linha[0].split(":")[-1].strip()
                 resumo[item] = resumo.get(item, []) + [valor]
 
-    texto = f"📊 *Resumo de Produção ({periodo.title()})*\n"
+    texto = f"📊 *Resumo de Produção ({periodo.title()})*
+"
     for k, v in resumo.items():
         texto += f"\n• {k}: {', '.join(v)}"
 
