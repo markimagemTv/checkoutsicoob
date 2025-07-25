@@ -151,13 +151,19 @@ def registrar_dados(update, context):
         if not nomes:
             update.message.reply_text("⚠️ Nenhum atendente encontrado com esse PA.")
             return
-        resposta = f"🔍 Atendentes do {pa} com produção registrada:\n"
+
+        resposta = f"📍 *Produções por Atendentes do {pa}*\n"
         for nome in nomes:
-            c.execute("SELECT COUNT(*) FROM producao WHERE atendente = ?", (nome,))
-            count = c.fetchone()[0]
-            if count:
-                resposta += f"• {nome}: {count} registros\n"
-        update.message.reply_text(resposta)
+            c.execute("SELECT data, dados FROM producao WHERE atendente = ? ORDER BY data DESC LIMIT 5", (nome,))
+            registros = c.fetchall()
+            if registros:
+                resposta += f"\n👤 *{nome}*:\n"
+                for data, dados in registros:
+                    data_fmt = datetime.datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m")
+                    dados_escape = re.sub(r'([_\\*\[\]()~`>#+=|{}.!-])', r'\\\\\\1', dados)
+                    resposta += f"• {data_fmt}: {dados_escape}\n"
+
+        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     comandos = {
@@ -238,7 +244,7 @@ def totalizar(update, context, periodo='dia'):
         else:
             texto += f"\n• {item}: {int(total)}"
 
-    texto = texto.replace("(", r"\(").replace(")", r"\)").replace("-", r"\-").replace(".", r"\.")
+    texto = texto.replace("(", r"\\(").replace(")", r"\\)").replace("-", r"\\-").replace(".", r"\\.")
     update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN_V2)
 
 # Token do Bot a partir do ambiente (Railway)
