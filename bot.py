@@ -154,15 +154,32 @@ def registrar_dados(update, context):
 
         resposta = f"📍 *Produções por Atendentes do {pa}*\n"
         for nome in nomes:
-            c.execute("SELECT data, dados FROM producao WHERE atendente = ? ORDER BY data DESC LIMIT 5", (nome,))
+            c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome,))
             registros = c.fetchall()
             if registros:
-                resposta += f"\n👤 *{nome}*:\n"
-                for data, dados in registros:
-                    data_fmt = datetime.datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m")
-                    dados_escape = re.sub(r'([_\\*\[\]()~`>#+=|{}.!-])', r'\\\\\\1', dados)
-                    resposta += f"• {data_fmt}: {dados_escape}\n"
+                soma_itens = {}
+                for r in registros:
+                    for item in itens_producao:
+                        if item.lower() in r[0].lower():
+                            try:
+                                valor_str = r[0].split(":")[-1].strip()
+                                valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
+                                encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
+                                if not encontrado:
+                                    continue
+                                valor = float(encontrado[0])
+                                soma_itens[item] = soma_itens.get(item, 0) + valor
+                            except:
+                                pass
+                if soma_itens:
+                    resposta += f"\n👤 *{nome}*:\n"
+                    for item, total in soma_itens.items():
+                        if "R$" in item:
+                            resposta += f"• {item}: R$ {total:,.2f}\n"
+                        else:
+                            resposta += f"• {item}: {int(total)}\n"
 
+        resposta = resposta.replace("(", r"\\(").replace(")", r"\\)").replace("-", r"\\-").replace(".", r"\\.")
         update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
