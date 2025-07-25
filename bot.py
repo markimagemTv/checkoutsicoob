@@ -1,26 +1,25 @@
-import psycopg2
+import sqlite3
 import datetime
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from telegram import Update
 import re
 import os
 
-# Conectar ao banco PostgreSQL (Railway)
-DATABASE_URL = os.environ.get("DATABASE_URL")
-conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+# Conectar ao banco SQLite
+conn = sqlite3.connect("producao.db", check_same_thread=False)
 c = conn.cursor()
 
 # Tabela de produção
 c.execute('''CREATE TABLE IF NOT EXISTS producao (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     atendente TEXT,
-    data DATE,
+    data TEXT,
     dados TEXT
 )''')
 
 # Tabela de atendentes
 c.execute('''CREATE TABLE IF NOT EXISTS atendentes (
-    user_id BIGINT PRIMARY KEY,
+    user_id INTEGER PRIMARY KEY,
     nome TEXT
 )''')
 conn.commit()
@@ -30,7 +29,7 @@ esperando_nome = {}
 
 def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    c.execute("SELECT nome FROM atendentes WHERE user_id = %s", (user_id,))
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
     resultado = c.fetchone()
 
     if resultado:
@@ -44,7 +43,7 @@ def registrar_nome(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if esperando_nome.get(user_id):
         nome = update.message.text.strip()
-        c.execute("INSERT INTO atendentes (user_id, nome) VALUES (%s, %s)", (user_id, nome))
+        c.execute("INSERT INTO atendentes (user_id, nome) VALUES (?, ?)", (user_id, nome))
         conn.commit()
         esperando_nome.pop(user_id)
         update.message.reply_text(f"✅ Nome registrado como {nome}. Agora envie sua produção no formato solicitado.")
@@ -56,7 +55,7 @@ def registrar_dados(update, context):
         return
 
     user_id = update.effective_user.id
-    c.execute("SELECT nome FROM atendentes WHERE user_id = %s", (user_id,))
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
     resultado = c.fetchone()
     if not resultado:
         update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
@@ -66,7 +65,7 @@ def registrar_dados(update, context):
     texto = update.message.text
     data = datetime.date.today().isoformat()
 
-    c.execute("INSERT INTO producao (atendente, data, dados) VALUES (%s, %s, %s)",
+    c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)",
               (nome, data, texto))
     conn.commit()
 
@@ -96,7 +95,7 @@ def extrair_qtd_valor(texto, chave):
 
 def totalizar(update, context):
     data = datetime.date.today().isoformat()
-    c.execute("SELECT dados FROM producao WHERE data = %s", (data,))
+    c.execute("SELECT dados FROM producao WHERE data = ?", (data,))
     linhas = c.fetchall()
 
     totais = {
@@ -147,26 +146,26 @@ def totalizar(update, context):
         totais['Empresas'] += int(extrair_valor(texto, "Empresas visitadas em Campo") or 0)
         totais['Indicações'] += int(extrair_valor(texto, "Indicações solicitadas") or 0)
 
-    resposta = f"\ud83d\udcc5 *Resumo de Produção - {data}*\n"
-    resposta += f"\n\ud83d\udcb3 Contas Abertas: {totais['Contas Abertas']}"
-    resposta += f"\n\ud83d\ude97 Giro Carteira: {totais['Giro Carteira']}"
-    resposta += f"\n\ud83c\udf1f Capital Integralizado: R$ {totais['Capital Integralizado']:.2f}"
-    resposta += f"\n\ud83d\udcb0 Aplicações: R$ {totais['Aplicações']:.2f}"
-    resposta += f"\n\ud83d\udccd Visitas Realizadas: {totais['Visitas Realizadas']}"
-    resposta += f"\n\ud83d\udd39 Contratos Cobrança: {totais['Contratos Cobrança'][0]} - R$ {totais['Contratos Cobrança'][1]:.2f}"
-    resposta += f"\n\ud83d\udcc8 Consignado Liberado: R$ {totais['Consignado Liberado']:.2f}"
-    resposta += f"\n\ud83d\udcb3 Consórcio Contratado: R$ {totais['Consórcio Contratado']:.2f}"
-    resposta += f"\n\ud83d\udcca SIPAG: {totais['SIPAG'][0]} - R$ {totais['SIPAG'][1]:.2f}"
-    resposta += f"\n\ud83c\udfe6 Previdência: R$ {totais['Previdência']:.2f}"
-    resposta += f"\n\ud83d\ude97 Seguro Auto: R$ {totais['Seguro Auto']:.2f}"
-    resposta += f"\n\ud83d\udc65 Seguro Vida: R$ {totais['Seguro Vida']:.2f}"
-    resposta += f"\n\ud83c\udfe1 Seguro Patrimonial: R$ {totais['Seguro Patrimonial']:.2f}"
-    resposta += f"\n\ud83d\udcbc Seguro Empresarial: R$ {totais['Seguro Empresarial']:.2f}"
-    resposta += f"\n\ud83d\udd0e Contatos de Prospecção: {totais['Prospecção']}"
-    resposta += f"\n\u274c Contatos com Inativos: {totais['Inativos']}"
-    resposta += f"\n\ud83d\udcc6 Contatos Fábrica de Limites: {totais['Limites']}"
-    resposta += f"\n\ud83c\udfe2 Empresas visitadas em Campo: {totais['Empresas']}"
-    resposta += f"\n\ud83d\udce2 Indicações solicitadas: {totais['Indicações']}"
+    resposta = f"📅 *Resumo de Produção - {data}*\n"
+    resposta += f"\n💳 Contas Abertas: {totais['Contas Abertas']}"
+    resposta += f"\n🚗 Giro Carteira: {totais['Giro Carteira']}"
+    resposta += f"\n🌟 Capital Integralizado: R$ {totais['Capital Integralizado']:.2f}"
+    resposta += f"\n💰 Aplicações: R$ {totais['Aplicações']:.2f}"
+    resposta += f"\n📍 Visitas Realizadas: {totais['Visitas Realizadas']}"
+    resposta += f"\n🔹 Contratos Cobrança: {totais['Contratos Cobrança'][0]} - R$ {totais['Contratos Cobrança'][1]:.2f}"
+    resposta += f"\n📈 Consignado Liberado: R$ {totais['Consignado Liberado']:.2f}"
+    resposta += f"\n💳 Consórcio Contratado: R$ {totais['Consórcio Contratado']:.2f}"
+    resposta += f"\n📊 SIPAG: {totais['SIPAG'][0]} - R$ {totais['SIPAG'][1]:.2f}"
+    resposta += f"\n🏦 Previdência: R$ {totais['Previdência']:.2f}"
+    resposta += f"\n🚗 Seguro Auto: R$ {totais['Seguro Auto']:.2f}"
+    resposta += f"\n👥 Seguro Vida: R$ {totais['Seguro Vida']:.2f}"
+    resposta += f"\n🏡 Seguro Patrimonial: R$ {totais['Seguro Patrimonial']:.2f}"
+    resposta += f"\n💼 Seguro Empresarial: R$ {totais['Seguro Empresarial']:.2f}"
+    resposta += f"\n🔎 Contatos de Prospecção: {totais['Prospecção']}"
+    resposta += f"\n❌ Contatos com Inativos: {totais['Inativos']}"
+    resposta += f"\n📆 Contatos Fábrica de Limites: {totais['Limites']}"
+    resposta += f"\n🏢 Empresas visitadas em Campo: {totais['Empresas']}"
+    resposta += f"\n📢 Indicações solicitadas: {totais['Indicações']}"
 
     update.message.reply_text(resposta, parse_mode='Markdown')
 
