@@ -278,7 +278,7 @@ def totalizar(update, context, periodo):
     update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
 def main():
-    updater = Updater("SEU_TOKEN_AQUI", use_context=True)
+    updater = Updater("7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ", use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
