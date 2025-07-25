@@ -2,14 +2,26 @@ import sqlite3
 import datetime
 import re
 import os
-from telegram import (Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ParseMode)
-from telegram.ext import (Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext)
+import logging
+import base64
+
+from telegram import (
+    Update, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ParseMode
+)
+from telegram.ext import (
+    Updater, CommandHandler, MessageHandler, Filters,
+    CallbackQueryHandler, CallbackContext
+)
+
+# Logging para debug
+logging.basicConfig(level=logging.INFO)
 
 # Conectar ao banco SQLite
 conn = sqlite3.connect("producao.db", check_same_thread=False)
 c = conn.cursor()
 
-# Tabela de produção
+# Tabelas
 c.execute('''CREATE TABLE IF NOT EXISTS producao (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     atendente TEXT,
@@ -17,7 +29,6 @@ c.execute('''CREATE TABLE IF NOT EXISTS producao (
     dados TEXT
 )''')
 
-# Tabela de atendentes
 c.execute('''CREATE TABLE IF NOT EXISTS atendentes (
     user_id INTEGER PRIMARY KEY,
     nome TEXT,
@@ -99,8 +110,13 @@ def registrar_nome(update: Update, context: CallbackContext):
         estado_registro.pop(user_id)
         update.message.reply_text(f"✅ Cadastro completo como {nome} - {cargo} ({lotacao}). Use /start novamente.", reply_markup=teclado_persistente)
         return True
-
     return False
+
+def encode_data(texto):
+    return base64.urlsafe_b64encode(texto.encode()).decode()
+
+def decode_data(encoded):
+    return base64.urlsafe_b64decode(encoded.encode()).decode()
 
 def callback_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -108,9 +124,13 @@ def callback_handler(update: Update, context: CallbackContext):
     data = query.data
 
     if data.startswith("producao_"):
-        item = data.replace("producao_", "")
-        query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode='Markdown')
-        context.user_data['item_producao'] = item
+        try:
+            item_codificado = data.replace("producao_", "")
+            item = decode_data(item_codificado)
+            context.user_data['item_producao'] = item
+            query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            query.edit_message_text("❌ Erro ao decodificar o item de produção.")
 
 def registrar_dados(update, context):
     if registrar_nome(update, context):
@@ -124,7 +144,8 @@ def registrar_dados(update, context):
         return
 
     nome = resultado[0]
-    texto = update.message.text
+    texto = update.message.text.strip()
+    texto_lower = texto.lower()
 
     if context.user_data.get('modo_busca'):
         context.user_data.pop('modo_busca', None)
@@ -145,7 +166,7 @@ def registrar_dados(update, context):
 
     if context.user_data.get('modo_pa'):
         context.user_data.pop('modo_pa', None)
-        pa = texto.strip()
+        pa = texto
         c.execute("SELECT nome FROM atendentes WHERE lotacao = ?", (pa,))
         nomes = [r[0] for r in c.fetchall()]
         if not nomes:
@@ -179,21 +200,21 @@ def registrar_dados(update, context):
                         else:
                             resposta += f"• {item}: {int(total)}\n"
 
-        resposta = resposta.replace("(", r"\\(").replace(")", r"\\)").replace("-", r"\\-").replace(".", r"\\.")
-        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN_V2)
+        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
         return
 
     comandos = {
-        "➕ Adicionar Nova Produção": lambda: enviar_botoes_producao(update),
-        "📅 Produção Diária": lambda: totalizar(update, context, periodo='dia'),
-        "🗓️ Produção Semanal": lambda: totalizar(update, context, periodo='semana'),
-        "📆 Produção Mensal": lambda: totalizar(update, context, periodo='mes'),
-        "📊 Produção Geral": lambda: totalizar(update, context, periodo='todos'),
-        "🔍 Buscar por Data/Atendente": lambda: busca_data_atendente(update, context),
-        "📍 Buscar por PA": lambda: busca_por_pa(update, context)
+        "➕ adicionar nova produção": lambda: enviar_botoes_producao(update),
+        "📅 produção diária": lambda: totalizar(update, context, periodo='dia'),
+        "🗓️ produção semanal": lambda: totalizar(update, context, periodo='semana'),
+        "📆 produção mensal": lambda: totalizar(update, context, periodo='mes'),
+        "📊 produção geral": lambda: totalizar(update, context, periodo='todos'),
+        "🔍 buscar por data/atendente": lambda: busca_data_atendente(update, context),
+        "📍 buscar por pa": lambda: busca_por_pa(update, context)
     }
-    if texto in comandos:
-        comandos[texto]()
+
+    if texto_lower in comandos:
+        comandos[texto_lower]()
         return
 
     item = context.user_data.get('item_producao')
@@ -210,7 +231,10 @@ def registrar_dados(update, context):
     update.message.reply_text("✅ Produção registrada com sucesso!", reply_markup=teclado_persistente)
 
 def enviar_botoes_producao(update):
-    botoes = [[InlineKeyboardButton(text=item, callback_data=f"producao_{item}")] for item in itens_producao]
+    botoes = [
+        [InlineKeyboardButton(text=item, callback_data=f"producao_{encode_data(item)}")]
+        for item in itens_producao
+    ]
     update.message.reply_text("📝 Selecione o item de produção:", reply_markup=InlineKeyboardMarkup(botoes))
 
 def busca_data_atendente(update, context):
@@ -261,10 +285,9 @@ def totalizar(update, context, periodo='dia'):
         else:
             texto += f"\n• {item}: {int(total)}"
 
-    texto = texto.replace("(", r"\\(").replace(")", r"\\)").replace("-", r"\\-").replace(".", r"\\.")
-    update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN_V2)
+    update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
 
-# Token do Bot a partir do ambiente (Railway)
+# Token do Bot
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_BOT_TOKEN não definido nas variáveis de ambiente.")
