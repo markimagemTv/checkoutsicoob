@@ -193,7 +193,7 @@ def totalizar(update, context, periodo='dia'):
         update.callback_query.edit_message_text(text=texto, parse_mode='Markdown')
 
 # Token do Bot (substitua pelo seu)
-TOKEN = 'SEU_TOKEN_AQUI'
+TOKEN = '7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ'
 
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
