@@ -265,7 +265,7 @@ def totalizar(update, context, periodo='dia'):
     update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN_V2)
 
 # Token do Bot a partir do ambiente (Railway)
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ")
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_BOT_TOKEN não definido nas variáveis de ambiente.")
 
