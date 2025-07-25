@@ -135,8 +135,7 @@ def registrar_dados(update, context):
             c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente))
             registros = c.fetchall()
             if registros:
-                resposta = f"📄 Produção de {atendente} em {data_str}:
-" + "\n".join([r[0] for r in registros])
+                resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
             else:
                 resposta = "⚠️ Nenhum dado encontrado."
             update.message.reply_text(resposta)
