@@ -153,8 +153,8 @@ def registrar_dados(update, context):
             return
 
         resposta = f"📍 *Produções por Atendentes do {pa}*\n"
-        for nome_pa in nomes:
-            c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome_pa,))
+        for nome in nomes:
+            c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome,))
             registros = c.fetchall()
             if registros:
                 soma_itens = {}
@@ -172,7 +172,7 @@ def registrar_dados(update, context):
                             except:
                                 pass
                 if soma_itens:
-                    resposta += f"\n👤 *{nome_pa}*:\n"
+                    resposta += f"\n👤 *{nome}*:\n"
                     for item, total in soma_itens.items():
                         if "R$" in item:
                             resposta += f"• {item}: R$ {total:,.2f}\n"
@@ -192,12 +192,9 @@ def registrar_dados(update, context):
         "🔍 Buscar por Data/Atendente": lambda: busca_data_atendente(update, context),
         "📍 Buscar por PA": lambda: busca_por_pa(update, context)
     }
-    
-    # Alteração principal aqui: busca com startswith para maior robustez
-    for chave, acao in comandos.items():
-        if texto.strip().startswith(chave.strip()):
-            acao()
-            return
+    if texto in comandos:
+        comandos[texto]()
+        return
 
     item = context.user_data.get('item_producao')
     if not item:
@@ -218,75 +215,66 @@ def enviar_botoes_producao(update):
 
 def busca_data_atendente(update, context):
     context.user_data['modo_busca'] = True
-    update.message.reply_text("🔎 Envie a data e atendente no formato: DD/MM/AAAA, Nome")
+    update.message.reply_text("🔎 Envie a data (DD/MM/AAAA) e o nome do atendente separados por vírgula.\nExemplo: 25/07/2025, João")
 
 def busca_por_pa(update, context):
     context.user_data['modo_pa'] = True
-    update.message.reply_text("📍 Envie o código do PA (ex: PA01, PA DIGITAL)")
+    update.message.reply_text("📍 Envie o nome do PA. Exemplo: PA01 ou PA DIGITAL")
 
-def totalizar(update, context, periodo):
-    user_id = update.effective_user.id
-    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
-    resultado = c.fetchone()
-    if not resultado:
-        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
-        return
-
-    nome = resultado[0]
-
+def totalizar(update, context, periodo='dia'):
     hoje = datetime.date.today()
-    if periodo == 'dia':
-        data_inicio = hoje
-    elif periodo == 'semana':
-        data_inicio = hoje - datetime.timedelta(days=hoje.weekday())
+    if periodo == 'semana':
+        inicio = hoje - datetime.timedelta(days=hoje.weekday())
     elif periodo == 'mes':
-        data_inicio = hoje.replace(day=1)
+        inicio = hoje.replace(day=1)
     elif periodo == 'todos':
-        data_inicio = datetime.date(2000, 1, 1)  # data antiga para pegar tudo
+        inicio = None
     else:
-        data_inicio = hoje
+        inicio = hoje
 
-    c.execute("SELECT dados FROM producao WHERE atendente = ? AND data >= ?", (nome, data_inicio.isoformat()))
-    registros = c.fetchall()
+    if inicio:
+        c.execute("SELECT dados FROM producao WHERE data >= ?", (inicio.isoformat(),))
+    else:
+        c.execute("SELECT dados FROM producao")
+    linhas = c.fetchall()
 
-    if not registros:
-        update.message.reply_text(f"⚠️ Nenhum dado encontrado para o período solicitado ({periodo}).")
-        return
-
-    soma_itens = {}
-    for r in registros:
+    resumo = {}
+    for linha in linhas:
+        texto = linha[0]
         for item in itens_producao:
-            if item.lower() in r[0].lower():
+            if item.lower() in texto.lower():
                 try:
-                    valor_str = r[0].split(":")[-1].strip()
+                    valor_str = texto.split(":")[-1].strip()
                     valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
                     encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
                     if not encontrado:
                         continue
                     valor = float(encontrado[0])
-                    soma_itens[item] = soma_itens.get(item, 0) + valor
+                    resumo[item] = resumo.get(item, 0) + valor
                 except:
                     pass
 
-    resposta = f"📊 *Produção {periodo.capitalize()}* de {nome}:\n"
-    for item, total in soma_itens.items():
+    texto = f"📊 *Resumo de Produção ({periodo.title()})*\n"
+    for item, total in resumo.items():
         if "R$" in item:
-            resposta += f"• {item}: R$ {total:,.2f}\n"
+            texto += f"\n• {item}: R$ {total:,.2f}"
         else:
-            resposta += f"• {item}: {int(total)}\n"
+            texto += f"\n• {item}: {int(total)}"
 
-    update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+    texto = texto.replace("(", r"\\(").replace(")", r"\\)").replace("-", r"\\-").replace(".", r"\\.")
+    update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN_V2)
 
-def main():
-    updater = Updater("7215000074:AAHbJH1V0vJsdLzCfeK4dMK-1el5qF-cPTQ", use_context=True)
-    dp = updater.dispatcher
+# Token do Bot a partir do ambiente (Railway)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN não definido nas variáveis de ambiente.")
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, registrar_dados))
-    dp.add_handler(CallbackQueryHandler(callback_handler))
+updater = Updater(TOKEN, use_context=True)
+dp = updater.dispatcher
 
-    updater.start_polling()
-    updater.idle()
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CallbackQueryHandler(callback_handler))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, registrar_dados))
 
-if __name__ == '__main__':
-    main()
+updater.start_polling()
+updater.idle()
