@@ -184,8 +184,12 @@ def totalizar(update, context, periodo='dia'):
     hoje = datetime.date.today()
     if periodo == 'semana':
         inicio = hoje - datetime.timedelta(days=hoje.weekday())
+        c.execute("SELECT dados FROM producao WHERE data >= ?", (inicio.isoformat(),))
+        linhas = c.fetchall()
     elif periodo == 'mes':
         inicio = hoje.replace(day=1)
+        c.execute("SELECT dados FROM producao WHERE data >= ?", (inicio.isoformat(),))
+        linhas = c.fetchall()
     elif periodo == 'todos':
         c.execute("SELECT dados FROM producao")
         linhas = c.fetchall()
