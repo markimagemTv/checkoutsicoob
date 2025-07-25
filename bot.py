@@ -68,7 +68,7 @@ teclado_persistente = ReplyKeyboardMarkup(
         [KeyboardButton("➕ Adicionar Nova Produção")],
         [KeyboardButton("📅 Produção Diária"), KeyboardButton("🗓️ Produção Semanal")],
         [KeyboardButton("📆 Produção Mensal"), KeyboardButton("📊 Produção Geral")],
-        [KeyboardButton("🔍 Buscar por Data/Atendente"), KeyboardButton("📍 Buscar p/ PA")]
+        [KeyboardButton("🔍 Buscar por Data/Atendente"), KeyboardButton("📍 Buscar por PA")]
     ],
     resize_keyboard=True,
     one_time_keyboard=False
