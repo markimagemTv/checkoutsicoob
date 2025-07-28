@@ -1,18 +1,14 @@
 import sqlite3
 import datetime
-import re
+import hashlib
 import os
 import logging
-import base64
-import hashlib
 
 from telegram import (
-    Update, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ParseMode
+    Update, ReplyKeyboardMarkup, KeyboardButton, ParseMode
 )
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters,
-    CallbackQueryHandler, CallbackContext
+    Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -170,8 +166,7 @@ def iniciar_producao(update, context):
     context.user_data['registrando_producao'] = True
     context.user_data['indice_atual'] = 0
     context.user_data['item_atual'] = itens_producao[0]
-    update.message.reply_text(f"📌 Vamos começar sua produção!
-{itens_producao[0]}:")
+    update.message.reply_text(f"📌 Vamos começar sua produção!\n{itens_producao[0]}:")
 
 def iniciar_exclusao(update, context):
     context.user_data['modo_exclusao'] = True
@@ -192,7 +187,7 @@ def busca_por_pa(update, context):
     if cargo.lower() not in ['gerente', 'coordenador', 'supervisor', 'diretor']:
         update.message.reply_text("❌ Apenas gerentes ou superiores podem acessar essa função.")
         return
-    c.execute("SELECT atendente, data, dados FROM producao INNER JOIN atendentes ON producao.user_id = atendentes.user_id WHERE lotacao = ?", (lotacao,))
+    c.execute("SELECT producao.atendente, producao.data, producao.dados FROM producao INNER JOIN atendentes ON producao.user_id = atendentes.user_id WHERE atendentes.lotacao = ?", (lotacao,))
     resultados = c.fetchall()
     if resultados:
         resposta = "📍 Produções do seu PA:\n\n"
