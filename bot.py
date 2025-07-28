@@ -325,7 +325,7 @@ async def registrar_dados(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Produção registrada:\n{dados}", reply_markup=teclado_persistente)
 
 async def main():
-    token = os.getenv("BOT_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         print("⚠️ Defina a variável de ambiente BOT_TOKEN com seu token do Telegram.")
         return
