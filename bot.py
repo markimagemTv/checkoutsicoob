@@ -4,6 +4,7 @@ import re
 import os
 import logging
 import base64
+import hashlib
 
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton,
@@ -14,16 +15,14 @@ from telegram.ext import (
     CallbackQueryHandler, CallbackContext
 )
 
-# Logging para debug
 logging.basicConfig(level=logging.INFO)
 
-# Conectar ao banco SQLite
 conn = sqlite3.connect("producao.db", check_same_thread=False)
 c = conn.cursor()
 
-# Tabelas
 c.execute('''CREATE TABLE IF NOT EXISTS producao (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     atendente TEXT,
     data TEXT,
     dados TEXT
@@ -33,52 +32,47 @@ c.execute('''CREATE TABLE IF NOT EXISTS atendentes (
     user_id INTEGER PRIMARY KEY,
     nome TEXT,
     cargo TEXT,
-    lotacao TEXT
+    lotacao TEXT,
+    senha_hash TEXT
 )''')
+
 conn.commit()
 
 estado_registro = {}
 
 itens_producao = [
-    "R$ Operações de Crédito",
-    "Qtd Contas Abertas",
-    "Qtd Giro Carteira",
-    "R$ Capital Integralizado",
-    "R$ Aplicações",
-    "Qtd Visitas Realizadas",
-    "Qtd e Valor Novos Contratos Cobrança",
-    "R$ Consignado Liberado",
-    "R$ Consórcio Contratado",
-    "Qtd e Valor:  SIPAG: Faturamento",
-    "R$ Previdência",
-    "R$ Seguro Auto",
-    "R$ Seguro Vida",
-    "R$ Seguro Patrimonial",
-    "R$ seguro empresarial",
-    "Cooperados Visitados no dia",
-    "Contatos de Prospecção",
-    "Contatos com Inativos",
-    "Contatos Fábrica de Limites",
-    "Empresas visitadas em Campo",
-    "Indicações solicitadas"
+    "R$ Operações de Crédito", "Qtd Contas Abertas", "Qtd Giro Carteira",
+    "R$ Capital Integralizado", "R$ Aplicações", "Qtd Visitas Realizadas",
+    "Qtd e Valor Novos Contratos Cobrança", "R$ Consignado Liberado",
+    "R$ Consórcio Contratado", "Qtd e Valor:  SIPAG: Faturamento",
+    "R$ Previdência", "R$ Seguro Auto", "R$ Seguro Vida",
+    "R$ Seguro Patrimonial", "R$ seguro empresarial",
+    "Cooperados Visitados no dia", "Contatos de Prospecção",
+    "Contatos com Inativos", "Contatos Fábrica de Limites",
+    "Empresas visitadas em Campo", "Indicações solicitadas"
 ]
+
+producoes_temp = {}
 
 teclado_persistente = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton("➕ Adicionar Nova Produção")],
         [KeyboardButton("📅 Produção Diária"), KeyboardButton("🗓️ Produção Semanal")],
         [KeyboardButton("📆 Produção Mensal"), KeyboardButton("📊 Produção Geral")],
-        [KeyboardButton("🔍 Buscar por Data/Atendente"), KeyboardButton("📍 Buscar por PA")]
+        [KeyboardButton("🔍 Buscar por Data/Atendente"), KeyboardButton("📍 Buscar por PA")],
+        [KeyboardButton("🗑️ Excluir Produção")]
     ],
     resize_keyboard=True,
     one_time_keyboard=False
 )
 
+def gerar_hash(senha: str) -> str:
+    return hashlib.sha256(senha.encode()).hexdigest()
+
 def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     c.execute("SELECT nome, cargo, lotacao FROM atendentes WHERE user_id = ?", (user_id,))
     resultado = c.fetchone()
-
     if resultado:
         nome = resultado[0]
         update.message.reply_text(f"👋 Olá, {nome}! Escolha uma opção abaixo:", reply_markup=teclado_persistente)
@@ -94,200 +88,120 @@ def registrar_nome(update: Update, context: CallbackContext):
         context.user_data['nome'] = texto
         estado_registro[user_id] = 'cargo'
         update.message.reply_text("💼 Agora envie seu cargo:")
-        return True
+        return
+
     elif estado_registro.get(user_id) == 'cargo':
         context.user_data['cargo'] = texto
         estado_registro[user_id] = 'lotacao'
         botoes = [[KeyboardButton(f"PA{str(i).zfill(2)}")] for i in range(10)] + [[KeyboardButton("PA DIGITAL")]]
         update.message.reply_text("🏢 Escolha sua lotação:", reply_markup=ReplyKeyboardMarkup(botoes, resize_keyboard=True))
-        return True
+        return
+
     elif estado_registro.get(user_id) == 'lotacao':
+        context.user_data['lotacao'] = texto
+        estado_registro[user_id] = 'senha'
+        update.message.reply_text("🔒 Agora defina uma senha para proteger sua produção:")
+        return
+
+    elif estado_registro.get(user_id) == 'senha':
+        senha = texto
         nome = context.user_data['nome']
         cargo = context.user_data['cargo']
-        lotacao = texto
-        c.execute("INSERT INTO atendentes (user_id, nome, cargo, lotacao) VALUES (?, ?, ?, ?)", (user_id, nome, cargo, lotacao))
+        lotacao = context.user_data['lotacao']
+        senha_hash = gerar_hash(senha)
+        c.execute("INSERT INTO atendentes (user_id, nome, cargo, lotacao, senha_hash) VALUES (?, ?, ?, ?, ?)",
+                  (user_id, nome, cargo, lotacao, senha_hash))
         conn.commit()
         estado_registro.pop(user_id)
         update.message.reply_text(f"✅ Cadastro completo como {nome} - {cargo} ({lotacao}). Use /start novamente.", reply_markup=teclado_persistente)
-        return True
-    return False
-
-def encode_data(texto):
-    return base64.urlsafe_b64encode(texto.encode()).decode()
-
-def decode_data(encoded):
-    return base64.urlsafe_b64decode(encoded.encode()).decode()
-
-def callback_handler(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    data = query.data
-
-    if data.startswith("producao_"):
-        try:
-            item_codificado = data.replace("producao_", "")
-            item = decode_data(item_codificado)
-            context.user_data['item_producao'] = item
-            query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            query.edit_message_text("❌ Erro ao decodificar o item de produção.")
-
-def registrar_dados(update, context):
-    if registrar_nome(update, context):
         return
 
-    user_id = update.effective_user.id
-    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
-    resultado = c.fetchone()
-    if not resultado:
-        update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
+    if context.user_data.get('registrando_producao'):
+        item = context.user_data.get('item_atual')
+        producoes_temp.setdefault(user_id, []).append(f"{item}: {texto}")
+        prox_indice = context.user_data['indice_atual'] + 1
+        if prox_indice < len(itens_producao):
+            context.user_data['indice_atual'] = prox_indice
+            context.user_data['item_atual'] = itens_producao[prox_indice]
+            update.message.reply_text(f"{itens_producao[prox_indice]}:")
+        else:
+            dados_final = " | ".join(producoes_temp[user_id])
+            data_hoje = datetime.datetime.now().strftime("%d/%m/%Y")
+            c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
+            atendente = c.fetchone()[0]
+            c.execute("INSERT INTO producao (user_id, atendente, data, dados) VALUES (?, ?, ?, ?)",
+                      (user_id, atendente, data_hoje, dados_final))
+            conn.commit()
+            update.message.reply_text("✅ Produção registrada com sucesso!", reply_markup=teclado_persistente)
+            context.user_data['registrando_producao'] = False
+            producoes_temp[user_id] = []
         return
 
-    nome = resultado[0]
-    texto = update.message.text.strip()
-    texto_lower = texto.lower()
-
-    if context.user_data.get('modo_busca'):
-        context.user_data.pop('modo_busca', None)
+    if context.user_data.get('modo_exclusao'):
         try:
-            data_str, atendente = [x.strip() for x in texto.split(",")]
-            data_obj = datetime.datetime.strptime(data_str, "%d/%m/%Y").date()
-            data_iso = data_obj.isoformat()
-            c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente))
-            registros = c.fetchall()
-            if registros:
-                resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
-            else:
-                resposta = "⚠️ Nenhum dado encontrado."
-            update.message.reply_text(resposta)
+            data_str, trecho = map(str.strip, texto.split(","))
+            context.user_data['exclusao_data'] = data_str
+            context.user_data['exclusao_trecho'] = trecho
+            update.message.reply_text("🔒 Confirme sua senha para excluir essa produção:")
+            context.user_data['modo_exclusao'] = False
+            context.user_data['confirmando_exclusao'] = True
         except:
-            update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome")
+            update.message.reply_text("❌ Formato inválido. Tente novamente.")
         return
 
-    if context.user_data.get('modo_pa'):
-        context.user_data.pop('modo_pa', None)
-        pa = texto
-        c.execute("SELECT nome FROM atendentes WHERE lotacao = ?", (pa,))
-        nomes = [r[0] for r in c.fetchall()]
-        if not nomes:
-            update.message.reply_text("⚠️ Nenhum atendente encontrado com esse PA.")
-            return
-
-        resposta = f"📍 *Produções por Atendentes do {pa}*\n"
-        for nome in nomes:
-            c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome,))
-            registros = c.fetchall()
-            if registros:
-                soma_itens = {}
-                for r in registros:
-                    for item in itens_producao:
-                        if item.lower() in r[0].lower():
-                            try:
-                                valor_str = r[0].split(":")[-1].strip()
-                                valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
-                                encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
-                                if not encontrado:
-                                    continue
-                                valor = float(encontrado[0])
-                                soma_itens[item] = soma_itens.get(item, 0) + valor
-                            except:
-                                pass
-                if soma_itens:
-                    resposta += f"\n👤 *{nome}*:\n"
-                    for item, total in soma_itens.items():
-                        if "R$" in item:
-                            resposta += f"• {item}: R$ {total:,.2f}\n"
-                        else:
-                            resposta += f"• {item}: {int(total)}\n"
-
-        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+    if context.user_data.get('confirmando_exclusao'):
+        senha = texto
+        c.execute("SELECT senha_hash FROM atendentes WHERE user_id = ?", (user_id,))
+        senha_hash_db = c.fetchone()[0]
+        if gerar_hash(senha) == senha_hash_db:
+            data = context.user_data['exclusao_data']
+            trecho = context.user_data['exclusao_trecho']
+            c.execute("DELETE FROM producao WHERE user_id = ? AND data = ? AND dados LIKE ?",
+                      (user_id, data, f"%{trecho}%"))
+            conn.commit()
+            update.message.reply_text("✅ Produção excluída com sucesso.", reply_markup=teclado_persistente)
+        else:
+            update.message.reply_text("❌ Senha incorreta. Operação cancelada.", reply_markup=teclado_persistente)
+        context.user_data['confirmando_exclusao'] = False
         return
 
-    comandos = {
-        "➕ adicionar nova produção": lambda: enviar_botoes_producao(update),
-        "📅 produção diária": lambda: totalizar(update, context, periodo='dia'),
-        "🗓️ produção semanal": lambda: totalizar(update, context, periodo='semana'),
-        "📆 produção mensal": lambda: totalizar(update, context, periodo='mes'),
-        "📊 produção geral": lambda: totalizar(update, context, periodo='todos'),
-        "🔍 buscar por data/atendente": lambda: busca_data_atendente(update, context),
-        "📍 buscar por pa": lambda: busca_por_pa(update, context)
-    }
+def iniciar_producao(update, context):
+    user_id = update.effective_user.id
+    context.user_data['registrando_producao'] = True
+    context.user_data['indice_atual'] = 0
+    context.user_data['item_atual'] = itens_producao[0]
+    update.message.reply_text(f"📌 Vamos começar sua produção!
+{itens_producao[0]}:")
 
-    if texto_lower in comandos:
-        comandos[texto_lower]()
-        return
-
-    item = context.user_data.get('item_producao')
-    if not item:
-        update.message.reply_text("⚠️ Use o botão 'Adicionar Nova Produção' para selecionar o item.")
-        return
-
-    data = datetime.date.today().isoformat()
-    registro = f"{item}: {texto}"
-    c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)", (nome, data, registro))
-    conn.commit()
-
-    context.user_data.pop('item_producao', None)
-    update.message.reply_text("✅ Produção registrada com sucesso!", reply_markup=teclado_persistente)
-
-def enviar_botoes_producao(update):
-    botoes = [
-        [InlineKeyboardButton(text=item, callback_data=f"producao_{encode_data(item)}")]
-        for item in itens_producao
-    ]
-    update.message.reply_text("📝 Selecione o item de produção:", reply_markup=InlineKeyboardMarkup(botoes))
-
-def busca_data_atendente(update, context):
-    context.user_data['modo_busca'] = True
-    update.message.reply_text("🔎 Envie a data (DD/MM/AAAA) e o nome do atendente separados por vírgula.\nExemplo: 25/07/2025, João")
+def iniciar_exclusao(update, context):
+    context.user_data['modo_exclusao'] = True
+    update.message.reply_text(
+        "🗑️ Envie a *data da produção* (DD/MM/AAAA) e parte do *conteúdo* registrado, separados por vírgula.\n"
+        "Exemplo: 28/07/2025, R$ Operações de Crédito",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 def busca_por_pa(update, context):
-    context.user_data['modo_pa'] = True
-    update.message.reply_text("📍 Envie o nome do PA. Exemplo: PA01 ou PA DIGITAL")
-
-def totalizar(update, context, periodo='dia'):
-    hoje = datetime.date.today()
-    if periodo == 'semana':
-        inicio = hoje - datetime.timedelta(days=hoje.weekday())
-    elif periodo == 'mes':
-        inicio = hoje.replace(day=1)
-    elif periodo == 'todos':
-        inicio = None
+    user_id = update.effective_user.id
+    c.execute("SELECT cargo, lotacao FROM atendentes WHERE user_id = ?", (user_id,))
+    dados = c.fetchone()
+    if not dados:
+        update.message.reply_text("⚠️ Cadastro não encontrado.")
+        return
+    cargo, lotacao = dados
+    if cargo.lower() not in ['gerente', 'coordenador', 'supervisor', 'diretor']:
+        update.message.reply_text("❌ Apenas gerentes ou superiores podem acessar essa função.")
+        return
+    c.execute("SELECT atendente, data, dados FROM producao INNER JOIN atendentes ON producao.user_id = atendentes.user_id WHERE lotacao = ?", (lotacao,))
+    resultados = c.fetchall()
+    if resultados:
+        resposta = "📍 Produções do seu PA:\n\n"
+        for r in resultados:
+            resposta += f"👤 {r[0]} | 📅 {r[1]}\n📌 {r[2]}\n\n"
+        update.message.reply_text(resposta[:4096])
     else:
-        inicio = hoje
+        update.message.reply_text("Nenhuma produção encontrada para seu PA.")
 
-    if inicio:
-        c.execute("SELECT dados FROM producao WHERE data >= ?", (inicio.isoformat(),))
-    else:
-        c.execute("SELECT dados FROM producao")
-    linhas = c.fetchall()
-
-    resumo = {}
-    for linha in linhas:
-        texto = linha[0]
-        for item in itens_producao:
-            if item.lower() in texto.lower():
-                try:
-                    valor_str = texto.split(":")[-1].strip()
-                    valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
-                    encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
-                    if not encontrado:
-                        continue
-                    valor = float(encontrado[0])
-                    resumo[item] = resumo.get(item, 0) + valor
-                except:
-                    pass
-
-    texto = f"📊 *Resumo de Produção ({periodo.title()})*\n"
-    for item, total in resumo.items():
-        if "R$" in item:
-            texto += f"\n• {item}: R$ {total:,.2f}"
-        else:
-            texto += f"\n• {item}: {int(total)}"
-
-    update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
-
-# Token do Bot
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_BOT_TOKEN não definido nas variáveis de ambiente.")
@@ -296,8 +210,10 @@ updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
 
 dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CallbackQueryHandler(callback_handler))
-dp.add_handler(MessageHandler(Filters.text & ~Filters.command, registrar_dados))
+dp.add_handler(MessageHandler(Filters.regex("^➕ Adicionar Nova Produção$"), iniciar_producao))
+dp.add_handler(MessageHandler(Filters.regex("^🗑️ Excluir Produção$"), iniciar_exclusao))
+dp.add_handler(MessageHandler(Filters.regex("^📍 Buscar por PA$"), busca_por_pa))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, registrar_nome))
 
 updater.start_polling()
 updater.idle()
