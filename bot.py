@@ -7,7 +7,7 @@ import base64
 
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, constants
+    ReplyKeyboardMarkup, KeyboardButton, ParseMode, constants
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 conn = sqlite3.connect("producao.db", check_same_thread=False)
 c = conn.cursor()
 
-# Criar tabelas
+# Criar tabelas se não existirem
 c.execute('''CREATE TABLE IF NOT EXISTS producao (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     atendente TEXT,
@@ -129,24 +129,48 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             item_codificado = data.replace("producao_", "")
             item = decode_data(item_codificado)
             context.user_data['item_producao'] = item
-            await query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode=constants.ParseMode.MARKDOWN)
-        except Exception as e:
+            await query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode=ParseMode.MARKDOWN)
+        except Exception:
             await query.edit_message_text("❌ Erro ao decodificar o item de produção.")
+
     elif data.startswith("excluir_"):
         try:
-            id_excluir = int(data.replace("excluir_", ""))
-            c.execute("DELETE FROM producao WHERE id = ?", (id_excluir,))
+            registro_id = int(data.replace("excluir_", ""))
+            c.execute("DELETE FROM producao WHERE id = ?", (registro_id,))
             conn.commit()
-            await query.edit_message_text(f"✅ Produção ID {id_excluir} excluída com sucesso!", reply_markup=teclado_persistente)
-        except Exception as e:
+            await query.edit_message_text("🗑️ Produção excluída com sucesso!")
+        except Exception:
             await query.edit_message_text("❌ Erro ao excluir a produção.")
 
-async def enviar_botoes_producao(update: Update):
+def parse_valor(texto):
+    # Remove R$, espaços e transforma vírgula em ponto para floats
+    texto = texto.upper().replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
+    try:
+        valor = float(texto)
+        return valor
+    except:
+        return None
+
+async def mostrar_producoes_para_excluir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
+    resultado = c.fetchone()
+    if not resultado:
+        await update.message.reply_text("⚠️ Você precisa se registrar usando /start antes.")
+        return
+
+    nome = resultado[0]
+    c.execute("SELECT id, data, dados FROM producao WHERE atendente = ? ORDER BY data DESC LIMIT 10", (nome,))
+    registros = c.fetchall()
+    if not registros:
+        await update.message.reply_text("⚠️ Você não tem registros de produção para excluir.")
+        return
+
     botoes = [
-        [InlineKeyboardButton(text=item, callback_data=f"producao_{encode_data(item)}")]
-        for item in itens_producao
+        [InlineKeyboardButton(f"{r[1]} - {r[2]}", callback_data=f"excluir_{r[0]}")]
+        for r in registros
     ]
-    await update.message.reply_text("📝 Selecione o item de produção:", reply_markup=InlineKeyboardMarkup(botoes))
+    await update.message.reply_text("❌ Selecione a produção que deseja excluir:", reply_markup=InlineKeyboardMarkup(botoes))
 
 async def busca_data_atendente(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['modo_busca'] = True
@@ -155,44 +179,6 @@ async def busca_data_atendente(update: Update, context: ContextTypes.DEFAULT_TYP
 async def busca_por_pa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['modo_pa'] = True
     await update.message.reply_text("📍 Envie o nome do PA. Exemplo: PA01 ou PA DIGITAL")
-
-async def mostrar_producoes_para_excluir(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
-    resultado = c.fetchone()
-    if not resultado:
-        await update.message.reply_text("⚠️ Você precisa estar cadastrado para usar essa função. Use /start para se cadastrar.")
-        return
-    nome = resultado[0]
-
-    c.execute("SELECT id, data, dados FROM producao WHERE atendente = ? ORDER BY data DESC LIMIT 10", (nome,))
-    registros = c.fetchall()
-
-    if not registros:
-        await update.message.reply_text("⚠️ Você não tem produções registradas para excluir.")
-        return
-
-    botoes = [
-        [InlineKeyboardButton(f"ID {reg[0]} | {reg[1]} | {reg[2][:30]}...", callback_data=f"excluir_{reg[0]}")]
-        for reg in registros
-    ]
-    await update.message.reply_text("❌ Selecione a produção que deseja excluir:", reply_markup=InlineKeyboardMarkup(botoes))
-
-def parse_valor(texto):
-    """
-    Tenta interpretar o valor enviado pelo usuário como número,
-    podendo conter R$ e formatos com vírgula ou ponto.
-    """
-    texto = texto.upper().replace("R$", "").strip()
-    texto = texto.replace(".", "").replace(",", ".")  # Ajusta para ponto decimal
-    encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", texto)
-    if not encontrado:
-        return None
-    try:
-        valor = float(encontrado[0])
-        return valor
-    except:
-        return None
 
 async def totalizar(update: Update, context: ContextTypes.DEFAULT_TYPE, periodo='dia'):
     hoje = datetime.date.today()
@@ -216,9 +202,16 @@ async def totalizar(update: Update, context: ContextTypes.DEFAULT_TYPE, periodo=
         texto = linha[0]
         for item in itens_producao:
             if item.lower() in texto.lower():
-                valor = parse_valor(texto.split(":")[-1].strip())
-                if valor is not None:
+                try:
+                    valor_str = texto.split(":")[-1].strip()
+                    valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
+                    encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
+                    if not encontrado:
+                        continue
+                    valor = float(encontrado[0])
                     resumo[item] = resumo.get(item, 0) + valor
+                except:
+                    pass
 
     texto = f"📊 *Resumo de Produção ({periodo.title()})*\n"
     for item, total in resumo.items():
@@ -227,7 +220,7 @@ async def totalizar(update: Update, context: ContextTypes.DEFAULT_TYPE, periodo=
         else:
             texto += f"\n• {item}: {int(total)}"
 
-    await update.message.reply_text(texto, parse_mode=constants.ParseMode.MARKDOWN)
+    await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
 
 async def registrar_dados(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await registrar_nome(update, context):
@@ -243,7 +236,7 @@ async def registrar_dados(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = resultado[0]
     texto = update.message.text.strip()
 
-    # Modos especiais
+    # Modo busca por data e atendente
     if context.user_data.get('modo_busca'):
         context.user_data.pop('modo_busca', None)
         try:
@@ -261,84 +254,90 @@ async def registrar_dados(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome")
         return
 
+    # Modo busca por PA
     if context.user_data.get('modo_pa'):
         context.user_data.pop('modo_pa', None)
-        pa = texto.upper()
+        pa = texto
         c.execute("SELECT nome FROM atendentes WHERE lotacao = ?", (pa,))
-        nomes = [r[0] for r in c.fetchall()]
-        if not nomes:
-            await update.message.reply_text("⚠️ Nenhum atendente encontrado com esse PA.")
+        atendentes = c.fetchall()
+        if not atendentes:
+            await update.message.reply_text(f"⚠️ Nenhum atendente encontrado para {pa}")
             return
-
-        resposta = f"📍 *Produções por Atendentes do {pa}*\n"
-        for nome_pa in nomes:
-            c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome_pa,))
-            registros = c.fetchall()
-            if registros:
-                soma_itens = {}
-                for r in registros:
-                    for item in itens_producao:
-                        if item.lower() in r[0].lower():
-                            valor = parse_valor(r[0].split(":")[-1].strip())
-                            if valor is not None:
-                                soma_itens[item] = soma_itens.get(item, 0) + valor
-                if soma_itens:
-                    resposta += f"\n👤 *{nome_pa}*:\n"
-                    for item, total in soma_itens.items():
-                        if "R$" in item:
-                            resposta += f"  • {item}: R$ {total:,.2f}\n"
-                        else:
-                            resposta += f"  • {item}: {int(total)}\n"
-        await update.message.reply_text(resposta, parse_mode=constants.ParseMode.MARKDOWN)
+        nomes = [a[0] for a in atendentes]
+        c.execute(f"SELECT dados, atendente, data FROM producao WHERE atendente IN ({','.join('?'*len(nomes))})", nomes)
+        registros = c.fetchall()
+        if registros:
+            resposta = f"📄 Produção no {pa}:\n"
+            for reg in registros:
+                resposta += f"{reg[2]} - {reg[1]}:\n{reg[0]}\n\n"
+        else:
+            resposta = "⚠️ Nenhum dado encontrado."
+        await update.message.reply_text(resposta)
         return
 
-    comandos = {
-        "➕ Adicionar Nova Produção": enviar_botoes_producao,
-        "📅 Produção Diária": lambda u, c: totalizar(u, c, periodo='dia'),
-        "🗓️ Produção Semanal": lambda u, c: totalizar(u, c, periodo='semana'),
-        "📆 Produção Mensal": lambda u, c: totalizar(u, c, periodo='mes'),
-        "📊 Produção Geral": lambda u, c: totalizar(u, c, periodo='todos'),
-        "🔍 Buscar por Data/Atendente": busca_data_atendente,
-        "📍 Buscar por PA": busca_por_pa,
-        "❌ Excluir Produção": mostrar_producoes_para_excluir
-    }
-
-    if texto in comandos:
-        await comandos[texto](update, context)
+    # Registrar dados normais
+    if "➕ Adicionar Nova Produção" in texto:
+        # Mostrar teclado com opções para escolher item
+        botoes = [
+            [InlineKeyboardButton(item, callback_data="producao_" + encode_data(item))]
+            for item in itens_producao
+        ]
+        await update.message.reply_text("📝 Escolha o item para registrar:", reply_markup=InlineKeyboardMarkup(botoes))
         return
 
+    # Espera o valor para o item selecionado
     item = context.user_data.get('item_producao')
-    if not item:
-        await update.message.reply_text("⚠️ Use o botão '➕ Adicionar Nova Produção' para selecionar o item.")
+    if item:
+        valor = parse_valor(texto)
+        if valor is None:
+            await update.message.reply_text("❌ Valor inválido. Envie um valor numérico válido, ex: R$1500, 1500, 1.500,00")
+            return
+        data_atual = datetime.date.today().isoformat()
+        texto_registro = f"{item}: {texto}"
+        c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)", (nome, data_atual, texto_registro))
+        conn.commit()
+        await update.message.reply_text(f"✅ Produção registrada:\n{texto_registro}", reply_markup=teclado_persistente)
+        context.user_data.pop('item_producao')
         return
 
-    valor = parse_valor(texto)
-    if valor is None:
-        await update.message.reply_text("❌ Valor inválido. Envie um número válido, ex: 1500, 1.500,00 ou R$ 1500,00")
+    # Botões especiais
+    if texto == "📅 Produção Diária":
+        await totalizar(update, context, 'dia')
+        return
+    if texto == "🗓️ Produção Semanal":
+        await totalizar(update, context, 'semana')
+        return
+    if texto == "📆 Produção Mensal":
+        await totalizar(update, context, 'mes')
+        return
+    if texto == "📊 Produção Geral":
+        await totalizar(update, context, 'todos')
+        return
+    if texto == "🔍 Buscar por Data/Atendente":
+        await busca_data_atendente(update, context)
+        return
+    if texto == "📍 Buscar por PA":
+        await busca_por_pa(update, context)
+        return
+    if texto == "❌ Excluir Produção":
+        await mostrar_producoes_para_excluir(update, context)
         return
 
-    data_hoje = datetime.date.today().isoformat()
-    dados = f"{item}: {valor}" if "R$" in item else f"{item}: {int(valor)}"
-    c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)", (nome, data_hoje, dados))
-    conn.commit()
-    context.user_data.pop('item_producao')
-    await update.message.reply_text(f"✅ Produção registrada:\n{dados}", reply_markup=teclado_persistente)
+    await update.message.reply_text("⚠️ Comando ou entrada não reconhecido. Use /start para reiniciar.")
 
-async def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+if __name__ == "__main__":
+    token = os.getenv("BOT_TOKEN")
     if not token:
         print("⚠️ Defina a variável de ambiente BOT_TOKEN com seu token do Telegram.")
-        return
+        exit(1)
 
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), registrar_dados))
+    app.add_handler(CallbackQueryHandler(callback_handler))
 
     print("🤖 Bot iniciado...")
-    await app.run_polling()
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    # Executa o bot sem asyncio.run() para evitar conflito de event loop
+    app.run_polling()
