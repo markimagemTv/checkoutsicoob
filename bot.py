@@ -1,24 +1,30 @@
 import sqlite3
 import datetime
-import hashlib
+import re
 import os
 import logging
+import base64
 
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton, ParseMode
+    Update, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
 )
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    CallbackQueryHandler, ContextTypes
 )
+from telegram.constants import ParseMode
 
+# Logging para debug
 logging.basicConfig(level=logging.INFO)
 
+# Conectar ao banco SQLite
 conn = sqlite3.connect("producao.db", check_same_thread=False)
 c = conn.cursor()
 
+# Tabelas
 c.execute('''CREATE TABLE IF NOT EXISTS producao (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
     atendente TEXT,
     data TEXT,
     dados TEXT
@@ -28,187 +34,334 @@ c.execute('''CREATE TABLE IF NOT EXISTS atendentes (
     user_id INTEGER PRIMARY KEY,
     nome TEXT,
     cargo TEXT,
-    lotacao TEXT,
-    senha_hash TEXT
+    lotacao TEXT
 )''')
-
 conn.commit()
 
 estado_registro = {}
 
 itens_producao = [
-    "R$ Operações de Crédito", "Qtd Contas Abertas", "Qtd Giro Carteira",
-    "R$ Capital Integralizado", "R$ Aplicações", "Qtd Visitas Realizadas",
-    "Qtd e Valor Novos Contratos Cobrança", "R$ Consignado Liberado",
-    "R$ Consórcio Contratado", "Qtd e Valor:  SIPAG: Faturamento",
-    "R$ Previdência", "R$ Seguro Auto", "R$ Seguro Vida",
-    "R$ Seguro Patrimonial", "R$ seguro empresarial",
-    "Cooperados Visitados no dia", "Contatos de Prospecção",
-    "Contatos com Inativos", "Contatos Fábrica de Limites",
-    "Empresas visitadas em Campo", "Indicações solicitadas"
+    "R$ Operações de Crédito",
+    "Qtd Contas Abertas",
+    "Qtd Giro Carteira",
+    "R$ Capital Integralizado",
+    "R$ Aplicações",
+    "Qtd Visitas Realizadas",
+    "Qtd e Valor Novos Contratos Cobrança",
+    "R$ Consignado Liberado",
+    "R$ Consórcio Contratado",
+    "Qtd e Valor:  SIPAG: Faturamento",
+    "R$ Previdência",
+    "R$ Seguro Auto",
+    "R$ Seguro Vida",
+    "R$ Seguro Patrimonial",
+    "R$ seguro empresarial",
+    "Cooperados Visitados no dia",
+    "Contatos de Prospecção",
+    "Contatos com Inativos",
+    "Contatos Fábrica de Limites",
+    "Empresas visitadas em Campo",
+    "Indicações solicitadas"
 ]
-
-producoes_temp = {}
 
 teclado_persistente = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton("➕ Adicionar Nova Produção")],
+        [KeyboardButton("➕ Adicionar Nova Produção"), KeyboardButton("❌ Excluir Produção")],
         [KeyboardButton("📅 Produção Diária"), KeyboardButton("🗓️ Produção Semanal")],
         [KeyboardButton("📆 Produção Mensal"), KeyboardButton("📊 Produção Geral")],
-        [KeyboardButton("🔍 Buscar por Data/Atendente"), KeyboardButton("📍 Buscar por PA")],
-        [KeyboardButton("🗑️ Excluir Produção")]
+        [KeyboardButton("🔍 Buscar por Data/Atendente"), KeyboardButton("📍 Buscar por PA")]
     ],
     resize_keyboard=True,
     one_time_keyboard=False
 )
 
-def gerar_hash(senha: str) -> str:
-    return hashlib.sha256(senha.encode()).hexdigest()
-
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     c.execute("SELECT nome, cargo, lotacao FROM atendentes WHERE user_id = ?", (user_id,))
     resultado = c.fetchone()
+
     if resultado:
         nome = resultado[0]
-        update.message.reply_text(f"👋 Olá, {nome}! Escolha uma opção abaixo:", reply_markup=teclado_persistente)
+        await update.message.reply_text(f"👋 Olá, {nome}! Escolha uma opção abaixo:", reply_markup=teclado_persistente)
     else:
         estado_registro[user_id] = 'nome'
-        update.message.reply_text("👤 Por favor, envie seu nome para registro:")
+        await update.message.reply_text("👤 Por favor, envie seu nome para registro:")
 
-def registrar_nome(update: Update, context: CallbackContext):
+async def registrar_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     texto = update.message.text.strip()
 
     if estado_registro.get(user_id) == 'nome':
         context.user_data['nome'] = texto
         estado_registro[user_id] = 'cargo'
-        update.message.reply_text("💼 Agora envie seu cargo:")
-        return
-
+        await update.message.reply_text("💼 Agora envie seu cargo:")
+        return True
     elif estado_registro.get(user_id) == 'cargo':
         context.user_data['cargo'] = texto
         estado_registro[user_id] = 'lotacao'
-        botoes = [[KeyboardButton(f"PA{str(i).zfill(2)}")] for i in range(10)] + [[KeyboardButton("PA DIGITAL")]]
-        update.message.reply_text("🏢 Escolha sua lotação:", reply_markup=ReplyKeyboardMarkup(botoes, resize_keyboard=True))
-        return
-
+        botoes = [
+            [KeyboardButton(f"PA{str(i).zfill(2)}") for i in range(5)],
+            [KeyboardButton(f"PA{str(i).zfill(2)}") for i in range(5, 10)],
+            [KeyboardButton("PA DIGITAL")]
+        ]
+        await update.message.reply_text("🏢 Escolha sua lotação:", reply_markup=ReplyKeyboardMarkup(botoes, resize_keyboard=True))
+        return True
     elif estado_registro.get(user_id) == 'lotacao':
-        context.user_data['lotacao'] = texto
-        estado_registro[user_id] = 'senha'
-        update.message.reply_text("🔒 Agora defina uma senha para proteger sua produção:")
-        return
-
-    elif estado_registro.get(user_id) == 'senha':
-        senha = texto
         nome = context.user_data['nome']
         cargo = context.user_data['cargo']
-        lotacao = context.user_data['lotacao']
-        senha_hash = gerar_hash(senha)
-        c.execute("INSERT INTO atendentes (user_id, nome, cargo, lotacao, senha_hash) VALUES (?, ?, ?, ?, ?)",
-                  (user_id, nome, cargo, lotacao, senha_hash))
+        lotacao = texto
+        c.execute("INSERT INTO atendentes (user_id, nome, cargo, lotacao) VALUES (?, ?, ?, ?)", (user_id, nome, cargo, lotacao))
         conn.commit()
         estado_registro.pop(user_id)
-        update.message.reply_text(f"✅ Cadastro completo como {nome} - {cargo} ({lotacao}). Use /start novamente.", reply_markup=teclado_persistente)
-        return
+        await update.message.reply_text(f"✅ Cadastro completo como {nome} - {cargo} ({lotacao}). Use /start novamente.", reply_markup=teclado_persistente)
+        return True
+    return False
 
-    if context.user_data.get('registrando_producao'):
-        item = context.user_data.get('item_atual')
-        producoes_temp.setdefault(user_id, []).append(f"{item}: {texto}")
-        prox_indice = context.user_data['indice_atual'] + 1
-        if prox_indice < len(itens_producao):
-            context.user_data['indice_atual'] = prox_indice
-            context.user_data['item_atual'] = itens_producao[prox_indice]
-            update.message.reply_text(f"{itens_producao[prox_indice]}:")
-        else:
-            dados_final = " | ".join(producoes_temp[user_id])
-            data_hoje = datetime.datetime.now().strftime("%d/%m/%Y")
-            c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
-            atendente = c.fetchone()[0]
-            c.execute("INSERT INTO producao (user_id, atendente, data, dados) VALUES (?, ?, ?, ?)",
-                      (user_id, atendente, data_hoje, dados_final))
-            conn.commit()
-            update.message.reply_text("✅ Produção registrada com sucesso!", reply_markup=teclado_persistente)
-            context.user_data['registrando_producao'] = False
-            producoes_temp[user_id] = []
-        return
+def encode_data(texto):
+    return base64.urlsafe_b64encode(texto.encode()).decode()
 
-    if context.user_data.get('modo_exclusao'):
+def decode_data(encoded):
+    return base64.urlsafe_b64decode(encoded.encode()).decode()
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith("producao_"):
         try:
-            data_str, trecho = map(str.strip, texto.split(","))
-            context.user_data['exclusao_data'] = data_str
-            context.user_data['exclusao_trecho'] = trecho
-            update.message.reply_text("🔒 Confirme sua senha para excluir essa produção:")
-            context.user_data['modo_exclusao'] = False
-            context.user_data['confirmando_exclusao'] = True
-        except:
-            update.message.reply_text("❌ Formato inválido. Tente novamente.")
-        return
+            item_codificado = data.replace("producao_", "")
+            item = decode_data(item_codificado)
+            context.user_data['item_producao'] = item
+            await query.edit_message_text(f"✍️ Envie o valor para *{item}*", parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await query.edit_message_text("❌ Erro ao decodificar o item de produção.")
 
-    if context.user_data.get('confirmando_exclusao'):
-        senha = texto
-        c.execute("SELECT senha_hash FROM atendentes WHERE user_id = ?", (user_id,))
-        senha_hash_db = c.fetchone()[0]
-        if gerar_hash(senha) == senha_hash_db:
-            data = context.user_data['exclusao_data']
-            trecho = context.user_data['exclusao_trecho']
-            c.execute("DELETE FROM producao WHERE user_id = ? AND data = ? AND dados LIKE ?",
-                      (user_id, data, f"%{trecho}%"))
+    elif data.startswith("excluir_"):
+        try:
+            registro_id = int(data.replace("excluir_", ""))
+            c.execute("DELETE FROM producao WHERE id = ?", (registro_id,))
             conn.commit()
-            update.message.reply_text("✅ Produção excluída com sucesso.", reply_markup=teclado_persistente)
-        else:
-            update.message.reply_text("❌ Senha incorreta. Operação cancelada.", reply_markup=teclado_persistente)
-        context.user_data['confirmando_exclusao'] = False
+            await query.edit_message_text("✅ Produção excluída com sucesso.")
+        except Exception:
+            await query.edit_message_text("❌ Erro ao excluir a produção.")
+
+async def registrar_dados(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await registrar_nome(update, context):
         return
 
-def iniciar_producao(update, context):
     user_id = update.effective_user.id
-    context.user_data['registrando_producao'] = True
-    context.user_data['indice_atual'] = 0
-    context.user_data['item_atual'] = itens_producao[0]
-    update.message.reply_text(f"📌 Vamos começar sua produção!\n{itens_producao[0]}:")
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
+    resultado = c.fetchone()
+    if not resultado:
+        await update.message.reply_text("⚠️ Por favor, envie seu nome primeiro usando /start.")
+        return
 
-def iniciar_exclusao(update, context):
-    context.user_data['modo_exclusao'] = True
-    update.message.reply_text(
-        "🗑️ Envie a *data da produção* (DD/MM/AAAA) e parte do *conteúdo* registrado, separados por vírgula.\n"
-        "Exemplo: 28/07/2025, R$ Operações de Crédito",
-        parse_mode=ParseMode.MARKDOWN
+    nome = resultado[0]
+    texto = update.message.text.strip()
+    texto_lower = texto.lower()
+
+    if context.user_data.get('modo_busca'):
+        context.user_data.pop('modo_busca', None)
+        try:
+            data_str, atendente = [x.strip() for x in texto.split(",")]
+            data_obj = datetime.datetime.strptime(data_str, "%d/%m/%Y").date()
+            data_iso = data_obj.isoformat()
+            c.execute("SELECT dados FROM producao WHERE data = ? AND atendente = ?", (data_iso, atendente))
+            registros = c.fetchall()
+            if registros:
+                resposta = f"📄 Produção de {atendente} em {data_str}:\n" + "\n".join([r[0] for r in registros])
+            else:
+                resposta = "⚠️ Nenhum dado encontrado."
+            await update.message.reply_text(resposta)
+        except:
+            await update.message.reply_text("❌ Formato inválido. Use: DD/MM/AAAA, Nome")
+        return
+
+    if context.user_data.get('modo_pa'):
+        context.user_data.pop('modo_pa', None)
+        pa = texto
+        c.execute("SELECT nome FROM atendentes WHERE lotacao = ?", (pa,))
+        nomes = [r[0] for r in c.fetchall()]
+        if not nomes:
+            await update.message.reply_text("⚠️ Nenhum atendente encontrado com esse PA.")
+            return
+
+        resposta = f"📍 *Produções por Atendentes do {pa}*\n"
+        for nome_pa in nomes:
+            c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome_pa,))
+            registros = c.fetchall()
+            if registros:
+                soma_itens = {}
+                for r in registros:
+                    for item in itens_producao:
+                        if item.lower() in r[0].lower():
+                            try:
+                                valor_str = r[0].split(":")[-1].strip()
+                                valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
+                                encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
+                                if not encontrado:
+                                    continue
+                                valor = float(encontrado[0])
+                                soma_itens[item] = soma_itens.get(item, 0) + valor
+                            except:
+                                pass
+                if soma_itens:
+                    resposta += f"\n👤 *{nome_pa}*:\n"
+                    for item, total in soma_itens.items():
+                        if "R$" in item:
+                            resposta += f"• {item}: R$ {total:,.2f}\n"
+                        else:
+                            resposta += f"• {item}: {int(total)}\n"
+
+        await update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    comandos = {
+        "➕ adicionar nova produção": lambda: enviar_botoes_producao(update),
+        "❌ excluir produção": lambda: listar_producoes_para_excluir(update, context),
+        "📅 produção diária": lambda: totalizar(update, context, periodo='dia'),
+        "🗓️ produção semanal": lambda: totalizar(update, context, periodo='semana'),
+        "📆 produção mensal": lambda: totalizar(update, context, periodo='mes'),
+        "📊 produção geral": lambda: totalizar(update, context, periodo='todos'),
+        "🔍 buscar por data/atendente": lambda: ativar_busca_data_atendente(update, context),
+        "📍 buscar por pa": lambda: ativar_busca_por_pa(update, context)
+    }
+
+    if texto_lower in comandos:
+        await comandos[texto_lower]()
+        return
+
+    # Caso seja um valor para registrar produção
+    item = context.user_data.get('item_producao')
+    if item:
+        try:
+            valor = float(texto.replace(",", "."))
+        except ValueError:
+            await update.message.reply_text("❌ Valor inválido, envie um número.")
+            return
+
+        hoje = datetime.date.today().isoformat()
+        dados_registro = f"{item}: {valor}"
+        c.execute("INSERT INTO producao (atendente, data, dados) VALUES (?, ?, ?)", (nome, hoje, dados_registro))
+        conn.commit()
+        context.user_data.pop('item_producao')
+        await update.message.reply_text(f"✅ Registrado: {dados_registro}", reply_markup=teclado_persistente)
+    else:
+        await update.message.reply_text("❌ Comando não reconhecido. Use o menu abaixo:", reply_markup=teclado_persistente)
+
+async def enviar_botoes_producao(update: Update):
+    botoes = []
+    for item in itens_producao:
+        codigo = encode_data(item)
+        botoes.append([InlineKeyboardButton(text=item, callback_data=f"producao_{codigo}")])
+    await update.message.reply_text(
+        "Escolha um item para registrar:",
+        reply_markup=InlineKeyboardMarkup(botoes)
     )
 
-def busca_por_pa(update, context):
+async def listar_producoes_para_excluir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    c.execute("SELECT cargo, lotacao FROM atendentes WHERE user_id = ?", (user_id,))
-    dados = c.fetchone()
-    if not dados:
-        update.message.reply_text("⚠️ Cadastro não encontrado.")
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
+    resultado = c.fetchone()
+    if not resultado:
+        await update.message.reply_text("⚠️ Você precisa se cadastrar primeiro com /start.")
         return
-    cargo, lotacao = dados
-    if cargo.lower() not in ['gerente', 'coordenador', 'supervisor', 'diretor']:
-        update.message.reply_text("❌ Apenas gerentes ou superiores podem acessar essa função.")
+
+    nome = resultado[0]
+    hoje = datetime.date.today().isoformat()
+    c.execute("SELECT id, dados FROM producao WHERE atendente = ? AND data = ?", (nome, hoje))
+    registros = c.fetchall()
+
+    if not registros:
+        await update.message.reply_text("ℹ️ Nenhuma produção encontrada para hoje.")
         return
-    c.execute("SELECT producao.atendente, producao.data, producao.dados FROM producao INNER JOIN atendentes ON producao.user_id = atendentes.user_id WHERE atendentes.lotacao = ?", (lotacao,))
-    resultados = c.fetchall()
-    if resultados:
-        resposta = "📍 Produções do seu PA:\n\n"
-        for r in resultados:
-            resposta += f"👤 {r[0]} | 📅 {r[1]}\n📌 {r[2]}\n\n"
-        update.message.reply_text(resposta[:4096])
+
+    botoes = []
+    for registro_id, dados in registros:
+        botoes.append([
+            InlineKeyboardButton(
+                text=f"❌ Excluir: {dados[:30]}...",
+                callback_data=f"excluir_{registro_id}"
+            )
+        ])
+
+    await update.message.reply_text(
+        "🗑️ Selecione a produção que deseja excluir:",
+        reply_markup=InlineKeyboardMarkup(botoes)
+    )
+
+async def totalizar(update: Update, context: ContextTypes.DEFAULT_TYPE, periodo='dia'):
+    user_id = update.effective_user.id
+    c.execute("SELECT nome FROM atendentes WHERE user_id = ?", (user_id,))
+    resultado = c.fetchone()
+    if not resultado:
+        await update.message.reply_text("⚠️ Você precisa se cadastrar primeiro com /start.")
+        return
+    nome = resultado[0]
+
+    hoje = datetime.date.today()
+    if periodo == 'dia':
+        data_inicio = hoje
+    elif periodo == 'semana':
+        data_inicio = hoje - datetime.timedelta(days=hoje.weekday())
+    elif periodo == 'mes':
+        data_inicio = hoje.replace(day=1)
     else:
-        update.message.reply_text("Nenhuma produção encontrada para seu PA.")
+        data_inicio = None
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("❌ TELEGRAM_BOT_TOKEN não definido nas variáveis de ambiente.")
+    if data_inicio:
+        c.execute("SELECT dados FROM producao WHERE atendente = ? AND data >= ?", (nome, data_inicio.isoformat()))
+    else:
+        c.execute("SELECT dados FROM producao WHERE atendente = ?", (nome,))
+    registros = c.fetchall()
+    if not registros:
+        await update.message.reply_text("ℹ️ Nenhuma produção registrada para o período.")
+        return
 
-updater = Updater(TOKEN, use_context=True)
-dp = updater.dispatcher
+    soma_itens = {}
+    for r in registros:
+        texto = r[0].lower()
+        for item in itens_producao:
+            if item.lower() in texto:
+                try:
+                    # Extrair número da string
+                    valor_str = r[0].split(":")[-1].strip()
+                    valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".")
+                    encontrado = re.findall(r"[-+]?\d*\.\d+|\d+", valor_str)
+                    if not encontrado:
+                        continue
+                    valor = float(encontrado[0])
+                    soma_itens[item] = soma_itens.get(item, 0) + valor
+                except:
+                    continue
 
-dp.add_handler(CommandHandler("start", start))
-dp.add_handler(MessageHandler(Filters.regex("^➕ Adicionar Nova Produção$"), iniciar_producao))
-dp.add_handler(MessageHandler(Filters.regex("^🗑️ Excluir Produção$"), iniciar_exclusao))
-dp.add_handler(MessageHandler(Filters.regex("^📍 Buscar por PA$"), busca_por_pa))
-dp.add_handler(MessageHandler(Filters.text & ~Filters.command, registrar_nome))
+    resposta = f"📊 Produção {periodo} para {nome}:\n"
+    for item, total in soma_itens.items():
+        if "R$" in item:
+            resposta += f"• {item}: R$ {total:,.2f}\n"
+        else:
+            resposta += f"• {item}: {int(total)}\n"
 
-updater.start_polling()
-updater.idle()
+    await update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+
+async def ativar_busca_data_atendente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['modo_busca'] = True
+    await update.message.reply_text("📅 Envie a data e o atendente no formato: DD/MM/AAAA, Nome")
+
+async def ativar_busca_por_pa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['modo_pa'] = True
+    await update.message.reply_text("📍 Envie o PA para buscar as produções:")
+
+def main():
+    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), registrar_dados))
+
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
